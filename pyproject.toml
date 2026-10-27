@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retranscription"
+version = "0.2.0"
+description = "Retranscription de réunions sans IA générative (Vosk/Kaldi, x-vecteurs, validation WER/DER)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "vosk>=0.3.44",
+    "av>=12.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "jiwer>=3.0",
+]
+
+[project.optional-dependencies]
+tests = ["pympi-ling>=1.70", "pyannote.metrics>=3.2"]
+
+[project.scripts]
+retranscription = "retranscription.__main__:_lancer"
+
+[tool.setuptools]
+packages = ["retranscription"]
