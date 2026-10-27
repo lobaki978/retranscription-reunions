@@ -5,7 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-TAUX = 16000          # fréquence d'échantillonnage de travail (Hz), attendue par Vosk
+TAUX = 16000          # fréquence d'échantillonnage de travail (Hz), attendue par les modèles
 OCTETS = 2            # PCM 16 bits
 
 log = logging.getLogger("retranscription")

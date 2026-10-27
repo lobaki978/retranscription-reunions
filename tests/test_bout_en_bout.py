@@ -1,7 +1,7 @@
 """Test de bout en bout sur deux sessions simulées (3 caméras, 4 micros).
 
-La reconnaissance de la parole est simulée (les modèles Vosk ne sont pas
-téléchargeables dans l'environnement de test) : le « transcripteur »
+La reconnaissance de la parole est simulée (les grands modèles ne sont pas
+téléchargés dans l'environnement de test) : le « transcripteur »
 renvoie les mots de la vérité terrain, avec 5 % de mots remplacés et 2 %
 de mots supprimés. Tout le reste tourne réellement : extraction des
 pistes, alignement, choix du micro, empreintes MFCC, regroupement,
@@ -97,8 +97,11 @@ def main():
     verites = {}
     for s, (locs, g) in sessions.items():
         verites[s], attendu = simuler_session(ESSAI / "medias" / s, locs, 600, graine=g)
-    p = Parametres(empreinte="mfcc", nb_locuteurs=4, n_extraits=4, duree_extrait_s=60)
-    p_auto = Parametres(empreinte="mfcc", nb_locuteurs=None, n_extraits=4, duree_extrait_s=60)
+    # voix synthétiques : méthode par fenêtres et empreintes MFCC (la diarisation
+    # neurale est testée sur de vraies voix dans tests/test_diarisation_neurale.py)
+    p = Parametres(diarisation="fenetres", empreinte="mfcc", nb_locuteurs=4, n_extraits=4, duree_extrait_s=60)
+    p_auto = Parametres(diarisation="fenetres", empreinte="mfcc", nb_locuteurs=None, n_extraits=4,
+                        duree_extrait_s=60)
 
     bilan = {}
     vrai_vers_id = {}

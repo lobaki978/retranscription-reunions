@@ -8,8 +8,8 @@ gain entre micros.
 Par blocs de 1 s, on retient la piste au RSB médian le plus élevé, avec
 une hystérésis de 3 dB pour éviter les bascules incessantes. Chaque
 bascule est déplacée vers la trame la plus silencieuse voisine (± 0,3 s),
-puis lissée par un fondu de 10 ms. Le signal composite sert à Vosk et
-aux x-vecteurs. Avec une seule piste, il est identique à cette piste.
+puis lissée par un fondu de 10 ms. Le signal composite sert à la
+reconnaissance de la parole et à la diarisation. Avec une seule piste, il est identique à cette piste.
 """
 
 from pathlib import Path

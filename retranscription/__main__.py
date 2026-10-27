@@ -29,10 +29,11 @@ def main(argv=None):  # noqa: C901
                                  description="Retranscription de réunions sans IA générative.")
     sub = ap.add_subparsers(dest="commande", required=True)
 
-    t = sub.add_parser("telecharger-modeles", help="télécharger les modèles Vosk")
+    t = sub.add_parser("telecharger-modeles", help="télécharger les modèles (une seule fois)")
     t.add_argument("--dossier", default=str(MODELES))
-    t.add_argument("--sans-grand-modele", action="store_true",
-                   help="ne pas télécharger le grand modèle (1,4 Go)")
+    t.add_argument("--moteur", choices=["wav2vec2", "vosk"], default="wav2vec2")
+    t.add_argument("--petit", action="store_true", help="modèle allégé (ordinateur peu puissant)")
+    t.add_argument("--sans-grand-modele", action="store_true", help=argparse.SUPPRESS)
     t.add_argument("-v", "--verbeux", action="store_true")
 
     tr = sub.add_parser("transcrire", help="transcrire une session (dossier de vidéos/audio)")
@@ -45,7 +46,14 @@ def main(argv=None):  # noqa: C901
     tr.add_argument("--modele", default=defaut.modele)
     tr.add_argument("--modele-leger", default=defaut.modele_leger)
     tr.add_argument("--modele-spk", default=defaut.modele_spk)
-    tr.add_argument("--empreinte", choices=["vosk", "mfcc"], default=defaut.empreinte)
+    tr.add_argument("--moteur", choices=["wav2vec2", "vosk"], default=defaut.moteur,
+                    help="reconnaissance de la parole (défaut : wav2vec2)")
+    tr.add_argument("--petit", action="store_true", help="modèle allégé (ordinateur peu puissant)")
+    tr.add_argument("--diarisation", choices=["neurale", "fenetres"], default=defaut.diarisation)
+    tr.add_argument("--empreinte", choices=["wespeaker", "vosk", "mfcc"], default=defaut.empreinte,
+                    help="empreintes de la méthode « fenetres »")
+    tr.add_argument("--seuil-voix", type=float, default=defaut.seuil_voix,
+                    help="distance de coupure si le nombre de voix est inconnu")
     tr.add_argument("--poids-canaux", type=float, default=defaut.poids_canaux,
                     help="0 à 1 : part de l'énergie des micros dans le regroupement (défaut 0)")
     tr.add_argument("--seuil-appariement", type=float, default=defaut.seuil_appariement)
@@ -54,7 +62,7 @@ def main(argv=None):  # noqa: C901
     tr.add_argument("--duree-extrait", type=float, default=defaut.duree_extrait_s)
     tr.add_argument("--nouveaux-extraits", action="store_true",
                     help="retirer de nouveaux extraits (écrase ceux existants)")
-    tr.add_argument("--refaire-asr", action="store_true", help="ne pas réutiliser la transcription Vosk")
+    tr.add_argument("--refaire-asr", action="store_true", help="ne pas réutiliser la reconnaissance déjà faite")
     tr.add_argument("--garder-pistes", action="store_true")
     tr.add_argument("--essai", action="store_true", help="ne traiter que les 10 premières minutes")
     _options_communes(tr)
@@ -81,14 +89,15 @@ def main(argv=None):  # noqa: C901
     configurer_journal(getattr(args, "verbeux", False))
 
     if args.commande == "telecharger-modeles":
-        from .telecharger import MODELES as LISTE, telecharger
-        noms = [n for n in LISTE if not (args.sans_grand_modele and n == "vosk-model-fr-0.22")]
-        telecharger(Path(args.dossier), noms)
+        from .telecharger import necessaires, telecharger
+        telecharger(Path(args.dossier), necessaires(args.moteur, args.petit or args.sans_grand_modele))
         return 0
 
     if args.commande == "transcrire":
         from .pipeline import transcrire_session
         p = Parametres(modele=args.modele, modele_leger=args.modele_leger, modele_spk=args.modele_spk,
+                       moteur=args.moteur, petit_modele=args.petit, diarisation=args.diarisation,
+                       seuil_voix=args.seuil_voix,
                        empreinte=args.empreinte, reference=args.reference,
                        poids_canaux=args.poids_canaux, nb_locuteurs=args.nb_locuteurs,
                        nb_max=args.nb_max, seuil_appariement=args.seuil_appariement,

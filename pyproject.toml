@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retranscription"
-version = "0.2.0"
-description = "Retranscription de réunions sans IA générative (Vosk/Kaldi, x-vecteurs, validation WER/DER)"
+version = "0.3.0"
+description = "Retranscription de réunions sans IA générative (wav2vec 2.0 + CTC, pyannote/WeSpeaker en ONNX, validation WER/DER)"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -15,6 +15,7 @@ dependencies = [
     "scipy>=1.10",
     "scikit-learn>=1.3",
     "jiwer>=3.0",
+    "onnxruntime>=1.17",
 ]
 
 [project.optional-dependencies]
@@ -25,3 +26,6 @@ retranscription = "retranscription.__main__:_lancer"
 
 [tool.setuptools]
 packages = ["retranscription"]
+
+[tool.setuptools.package-data]
+retranscription = ["donnees/w2v_mini/*"]

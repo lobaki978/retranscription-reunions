@@ -23,16 +23,25 @@ from .utils import log
 
 FICHIER_REGLAGES = dossier_donnees_utilisateur() / "reglages.json"
 DOCUMENTS = Path.home() / "Documents"
-GRAND, PETIT, SPK = "vosk-model-fr-0.22", "vosk-model-small-fr-0.22", "vosk-model-spk-0.4"
+MOTEURS = {"wav2vec 2.0 (recommandé, plus précis)": "wav2vec2",
+           "Vosk (plus rapide, moins précis)": "vosk"}
+TAILLES = {"wav2vec2-fr": 1200, "wav2vec2-fr-int8": 400, "segmentation-3.0.onnx": 6,
+           "wespeaker-resnet34.onnx": 26, "vosk-model-fr-0.22": 1400, "vosk-model-small-fr-0.22": 40,
+           "vosk-model-spk-0.4": 13}
 
 
 # ----------------------------------------------------------------------
 def lire_reglages() -> dict:
     defaut = {"resultats": str(DOCUMENTS / "Retranscription" / "resultats"),
               "registre": str(DOCUMENTS / "Retranscription" / "registre"),
-              "videos": "", "seuil": 0.7, "petit_modele": False}
+              "videos": "", "seuil": 0.5, "petit_modele": False}
     try:
-        defaut.update(json.loads(FICHIER_REGLAGES.read_text(encoding="utf-8")))
+        lus = json.loads(FICHIER_REGLAGES.read_text(encoding="utf-8"))
+        # réglages d'une version antérieure à 0.3 : l'ancien seuil par défaut (0,7)
+        # convenait aux x-vecteurs Vosk, pas aux empreintes WeSpeaker
+        if "version" not in lus and lus.get("seuil") == 0.7:
+            lus["seuil"] = 0.5
+        defaut.update(lus)
     except Exception:
         pass
     return defaut
@@ -180,9 +189,15 @@ class Application:
         # --- onglet 1 : transcrire -------------------------------------------
         titre(page1, "Session à transcrire")
         self.v_videos = tk.StringVar(value=self.reglages.get("videos", ""))
-        ligne(page1, "Dossier des vidéos", ttk.Entry(page1, textvariable=self.v_videos),
-              ttk.Button(page1, text="Choisir…", command=self._choisir_videos),
-              "Un dossier par session, avec toutes ses vidéos (ou fichiers son). Rien n'est converti ni modifié.")
+        champ_videos = ttk.Entry(page1, textvariable=self.v_videos)
+        champ_videos.bind("<FocusOut>", lambda e: self._remplir_references())
+        champ_videos.bind("<Return>", lambda e: self._remplir_references())
+        choix = ttk.Frame(page1)
+        ttk.Button(choix, text="Dossier…", command=self._choisir_videos).pack(side="left")
+        ttk.Button(choix, text="Vidéo…", command=self._choisir_video).pack(side="left", padx=(4, 0))
+        ligne(page1, "Dossier des vidéos", champ_videos, choix,
+              "Un dossier par session, avec toutes ses vidéos (ou fichiers son). « Dossier… » n'affiche "
+              "que les dossiers : c'est normal. « Vidéo… » permet de choisir directement une vidéo.")
         self.v_reference = tk.StringVar()
         self.c_reference = ttk.Combobox(page1, textvariable=self.v_reference, state="readonly")
         ligne(page1, "Vidéo de référence", self.c_reference, None,
@@ -199,8 +214,14 @@ class Application:
         ligne(page1, "Nom de la session", petits, None,
               "Nom court sans espace (ex. S01). Personnes : participants et animateurs ; "
               "0 = je ne sais pas (estimation automatique, moins fiable).")
+        self.v_moteur = tk.StringVar(value=next((k for k, v in MOTEURS.items()
+                                                 if v == self.reglages.get("moteur", "wav2vec2")),
+                                                list(MOTEURS)[0]))
+        ligne(page1, "Reconnaissance", ttk.Combobox(page1, textvariable=self.v_moteur, state="readonly",
+                                                    values=list(MOTEURS)), None,
+              "wav2vec 2.0 : en général plus juste que Vosk. Faites d'abord un essai (case ci-dessous).")
         self.v_petit = tk.BooleanVar(value=bool(self.reglages.get("petit_modele")))
-        ttk.Checkbutton(page1, text="Ordinateur peu puissant (moins de 8 Go de mémoire) : petit modèle, moins précis",
+        ttk.Checkbutton(page1, text="Ordinateur peu puissant (moins de 8 Go de mémoire) : modèle allégé, un peu moins précis",
                         variable=self.v_petit).grid(row=lignes[page1], column=1, columnspan=2, sticky="w", pady=3)
         lignes[page1] += 1
         self.v_essai = tk.BooleanVar(value=False)
@@ -247,13 +268,13 @@ class Application:
             lignes[page2] += 1
             self._boutons_etapes.append(b)
         self.b_ouvrir, self.b_appliquer, self.b_evaluer, self.b_calibrer = self._boutons_etapes
-        self.v_seuil = tk.StringVar(value=str(self.reglages.get("seuil", 0.7)))
+        self.v_seuil = tk.StringVar(value=str(self.reglages.get("seuil", 0.5)))
         avance = ttk.Frame(page2)
         avance.grid(row=lignes[page2], column=0, columnspan=3, sticky="w", pady=(14, 0))
         lignes[page2] += 1
         ttk.Label(avance, text="Seuil d'appariement entre sessions :").pack(side="left")
         ttk.Entry(avance, textvariable=self.v_seuil, width=6).pack(side="left", padx=6)
-        ttk.Label(avance, text="(0,7 par défaut ; remplacé par « Calibrer le seuil »)",
+        ttk.Label(avance, text="(0,5 par défaut ; remplacé par « Calibrer le seuil »)",
                   style="Aide.TLabel").pack(side="left")
 
         # --- journal, toujours visible -------------------------------------
@@ -296,17 +317,57 @@ class Application:
         self._choisir(self.v_videos)
         self._remplir_references()
 
-    def _remplir_references(self):
+    def _choisir_video(self):
+        from tkinter import filedialog
+        from .audio import EXTENSIONS_MEDIA
+        motifs = " ".join(f"*{e} *{e.upper()}" for e in sorted(EXTENSIONS_MEDIA))
+        f = filedialog.askopenfilename(
+            initialdir=self._dossier_videos() or str(Path.home()),
+            filetypes=[("Vidéos et fichiers son", motifs), ("Tous les fichiers", "*.*")])
+        if f:
+            self.v_videos.set(str(Path(f).parent))
+            self._remplir_references(reference=Path(f).name)
+
+    def _dossier_videos(self) -> str:
+        """Chemin du dossier des vidéos, nettoyé (guillemets d'un copier-coller, espaces)."""
+        brut = self.v_videos.get().strip().strip('"').strip("'").strip()
+        p = Path(brut) if brut else None
+        if p and p.is_file():                 # chemin d'une vidéo au lieu du dossier
+            p = p.parent
+        if p and str(p) != self.v_videos.get():
+            self.v_videos.set(str(p))
+        return str(p) if p else ""
+
+    def _remplir_references(self, reference=None):
         from .audio import lister_medias
-        d = Path(self.v_videos.get())
-        if not d.is_dir():
+        brut = self.v_videos.get().strip().strip('"').strip("'").strip()
+        fichier_donne = Path(brut).name if brut and Path(brut).is_file() else None
+        d = Path(self._dossier_videos()) if brut else None
+        if not d or not d.is_dir():
+            if brut:
+                self._ecrire(f"Dossier introuvable : {brut}")
             return
         noms = [f.name for f in lister_medias(d)]
         self.c_reference["values"] = noms
-        if noms and self.v_reference.get() not in noms:
+        voulu = reference or fichier_donne
+        if voulu in noms:
+            self.v_reference.set(voulu)
+        elif noms and self.v_reference.get() not in noms:
             self.v_reference.set(noms[0])
-        if not noms:
-            self._ecrire(f"Aucune vidéo ni fichier son reconnu dans {d}.")
+        if noms:
+            self._ecrire(f"{len(noms)} fichier(s) trouvé(s) dans {d.name} : {', '.join(noms)}")
+        else:
+            self.v_reference.set("")
+            from .audio import EXTENSIONS_MEDIA
+            dessous = [f for f in d.rglob("*") if f.is_file() and f.suffix.lower() in EXTENSIONS_MEDIA][:5]
+            if dessous:
+                self._ecrire(f"Aucune vidéo directement dans {d.name}, mais il y en a dans ses sous-dossiers "
+                             f"({', '.join(str(f.relative_to(d)) for f in dessous)}). "
+                             "Choisissez le sous-dossier qui contient les vidéos de la session.")
+            else:
+                autres = sorted({f.suffix.lower() for f in d.iterdir() if f.is_file()})
+                self._ecrire(f"Aucune vidéo ni fichier son reconnu dans {d}."
+                             + (f" Extensions présentes : {', '.join(autres)}." if autres else " Le dossier est vide."))
         if not self.v_session.get():
             nom = re.sub(r"[^A-Za-z0-9_-]+", "_", d.name).strip("_")[:20]
             self.v_session.set(nom or "S01")
@@ -337,26 +398,32 @@ class Application:
     def _sauver_reglages(self):
         self.reglages.update({"resultats": self.v_resultats.get(), "registre": self.v_registre.get(),
                               "videos": self.v_videos.get(), "seuil": self._seuil(),
-                              "petit_modele": bool(self.v_petit.get())})
+                              "petit_modele": bool(self.v_petit.get()),
+                              "moteur": MOTEURS.get(self.v_moteur.get(), "wav2vec2"),
+                              "version": __version__})
         ecrire_reglages(self.reglages)
 
     def _seuil(self) -> float:
         try:
             return float(self.v_seuil.get().replace(",", "."))
         except ValueError:
-            return 0.7
+            return 0.5
 
     # --- modèles ----------------------------------------------------------
+    def _moteur(self) -> str:
+        return MOTEURS.get(self.v_moteur.get(), "wav2vec2")
+
     def _modeles_manquants(self, petit: bool):
-        requis = [PETIT, SPK] if petit else [GRAND, PETIT, SPK]
-        return [m for m in requis if not (MODELES / m).exists()]
+        from .telecharger import necessaires
+        return [m for m in necessaires(self._moteur(), petit) if not (MODELES / m).exists()]
 
     def _etat_modeles(self):
         manq = self._modeles_manquants(bool(self.v_petit.get()))
         self._ecrire(f"Retranscription de réunions, version {__version__}.")
         if manq:
-            self._ecrire("Les modèles de reconnaissance ne sont pas encore installés. Ils seront "
-                         "téléchargés au premier clic sur « Transcrire » (environ 1,5 Go, une seule fois).")
+            mo = sum(TAILLES.get(m, 0) for m in manq)
+            self._ecrire("Les modèles ne sont pas encore installés. Ils seront téléchargés au premier "
+                         f"clic sur « Transcrire » (environ {mo} Mo, une seule fois).")
         else:
             self._ecrire(f"Modèles installés dans {MODELES}.")
 
@@ -408,10 +475,16 @@ class Application:
     # --- actions ----------------------------------------------------------
     def _transcrire(self):
         from tkinter import messagebox
-        videos = Path(self.v_videos.get())
+        videos = Path(self._dossier_videos())
         session = self.v_session.get().strip()
         if not videos.is_dir():
             messagebox.showwarning("Retranscription", "Choisissez d'abord le dossier des vidéos.")
+            return
+        from .audio import lister_medias
+        if not lister_medias(videos):
+            messagebox.showwarning("Retranscription", f"Aucune vidéo ni fichier son dans {videos}.\n"
+                                   "Voir le journal en bas de la fenêtre.")
+            self._remplir_references()
             return
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", session):
             messagebox.showwarning("Retranscription",
@@ -433,15 +506,13 @@ class Application:
                 return
         manq = self._modeles_manquants(petit)
         if manq and not messagebox.askyesno(
-                "Retranscription", "Les modèles de reconnaissance doivent être téléchargés une fois "
-                f"({'environ 50 Mo' if petit else 'environ 1,5 Go'}). Les télécharger maintenant ?"):
+                "Retranscription", "Les modèles doivent être téléchargés une fois (environ "
+                f"{sum(TAILLES.get(m, 0) for m in manq)} Mo). Les télécharger maintenant ?"):
             return
         self._sauver_reglages()
         p = Parametres(nb_locuteurs=nb or None, reference=self.v_reference.get() or None,
-                       seuil_appariement=self._seuil(),
+                       seuil_appariement=self._seuil(), moteur=self._moteur(), petit_modele=petit,
                        duree_max_s=600.0 if self.v_essai.get() else None)
-        if petit:
-            p.modele = str(MODELES / PETIT)
         date_s = self.v_date.get().strip()
         registre = Path(self.v_registre.get())
 

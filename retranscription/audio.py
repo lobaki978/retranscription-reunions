@@ -50,7 +50,8 @@ def verifier_ffmpeg() -> None:
 
 
 EXTENSIONS_MEDIA = {
-    ".mp4", ".mov", ".mkv", ".avi", ".mts", ".m2ts", ".mxf", ".webm", ".m4v",
+    ".mp4", ".mov", ".mkv", ".avi", ".mts", ".m2ts", ".mxf", ".webm", ".m4v", ".wmv",
+    ".mpg", ".mpeg", ".ts", ".3gp", ".flv", ".vob",
     ".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma",
 }
 

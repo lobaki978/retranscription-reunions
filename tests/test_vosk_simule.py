@@ -135,6 +135,59 @@ def test_telechargement(dossier):
     print("OK : téléchargement et décompression des modèles (serveur local).")
 
 
+def test_telechargement_neuronaux(dossier):
+    """Modèles neuronaux : archive .zip, fichier simple, archive .tar.bz2, source de repli."""
+    import io
+    import tarfile
+    from retranscription import telecharger as T
+    srv_dir = dossier / "serveur2"
+    srv_dir.mkdir()
+    with zipfile.ZipFile(srv_dir / "wav2vec2-fr-int8.zip", "w") as z:
+        z.writestr("wav2vec2-fr-int8/model.onnx", "x" * 1000)
+        z.writestr("wav2vec2-fr-int8/config_retranscription.json", "{}")
+    (srv_dir / "wespeaker.onnx").write_bytes(b"w" * 500)
+    with tarfile.open(srv_dir / "seg.tar.bz2", "w:bz2") as t:
+        donnees = b"s" * 700
+        info = tarfile.TarInfo("sherpa-onnx-pyannote-segmentation-3-0/model.onnx")
+        info.size = len(donnees)
+        t.addfile(info, io.BytesIO(donnees))
+
+    class H(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=str(srv_dir), **k)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    ancien = dict(T.CATALOGUE)
+    try:
+        T.CATALOGUE["wav2vec2-fr-int8"] = ("test", [(url + "wav2vec2-fr-int8.zip", "zip")])
+        T.CATALOGUE["wespeaker-resnet34.onnx"] = ("test", [(url + "wespeaker.onnx", "fichier")])
+        T.CATALOGUE["segmentation-3.0.onnx"] = ("test", [(url + "absent.onnx", "fichier"),   # 404
+                                                         (url + "seg.tar.bz2", "tar-seg")])
+        noms = T.necessaires("wav2vec2", petit=True)
+        assert noms == ["wav2vec2-fr-int8", "segmentation-3.0.onnx", "wespeaker-resnet34.onnx"], noms
+        T.telecharger(dossier / "modeles2", noms)
+        m = dossier / "modeles2"
+        assert (m / "wav2vec2-fr-int8" / "model.onnx").stat().st_size == 1000
+        assert (m / "wespeaker-resnet34.onnx").read_bytes() == b"w" * 500
+        assert (m / "segmentation-3.0.onnx").read_bytes() == b"s" * 700
+        assert not list(m.glob("*.partiel")), "fichier partiel non supprimé"
+        T.CATALOGUE["wav2vec2-fr"] = ("test", [(url + "introuvable.zip", "zip")])
+        try:
+            T.telecharger(m, ["wav2vec2-fr"])
+            raise AssertionError("erreur attendue")
+        except RuntimeError as e:
+            assert "modeles-1" in str(e)
+    finally:
+        T.CATALOGUE.clear()
+        T.CATALOGUE.update(ancien)
+        srv.shutdown()
+    print("OK : téléchargement des modèles neuronaux (zip, fichier, tar.bz2, source de repli, erreur claire).")
+
+
 def test_vraie_bibliotheque():
     """La vraie bibliothèque Vosk se charge ; un modèle absent donne une erreur claire."""
     import importlib
@@ -154,6 +207,7 @@ if __name__ == "__main__":
     try:
         test_transcription_et_xvecteurs(d)
         test_telechargement(d)
+        test_telechargement_neuronaux(d)
         test_vraie_bibliotheque()
         print("TOUS LES TESTS SONT PASSÉS.")
     finally:

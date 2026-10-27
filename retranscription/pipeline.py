@@ -13,11 +13,17 @@ from .alignement import aligner
 from .asr import Mot, charger_modele, transcrire_wav
 from .audio import extraire_pistes, lister_medias, verifier_ffmpeg, wav_memmap
 from .canaux import Micros
-from .config import Parametres
-from .diarisation import attribuer_mots, classer, normer, preparer
+from .config import Parametres, seuil_appariement
+from .diarisation import attribuer_mots, classer, lisser_tours, normer, preparer
 from .empreintes import ExtracteurMFCC, ExtracteurVosk, fenetres, regions_parole
 from .registre import Registre, numero
 from .utils import ecrire_json, lire_json, log
+
+
+def modele_reconnaissance(p: Parametres) -> str:
+    if p.moteur == "vosk":
+        return p.modele_leger if p.petit_modele else p.modele
+    return p.modele_w2v_leger if p.petit_modele else p.modele_w2v
 
 
 def _chemins(racine: Path, session: str) -> Dict[str, Path]:
@@ -39,12 +45,16 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
     # modèles présents ? (vérifié avant les étapes longues)
     requis = []
     if transcripteur is None:
-        requis.append(p.modele)
-    if extracteur is None and p.empreinte == "vosk":
+        requis.append(modele_reconnaissance(p))
+    if extracteur is None and p.diarisation == "neurale":
+        requis += [p.modele_segmentation, p.modele_wespeaker]
+    elif extracteur is None and p.empreinte == "vosk":
         requis.append(p.modele_spk)
+    elif extracteur is None and p.empreinte == "wespeaker":
+        requis.append(p.modele_wespeaker)
     manquants = [m for m in requis if not Path(m).exists()]
     if manquants:
-        raise FileNotFoundError("Modèle(s) Vosk introuvable(s) : " + ", ".join(manquants)
+        raise FileNotFoundError("Modèle(s) introuvable(s) : " + ", ".join(manquants)
                                 + "\nLancez d'abord : python -m retranscription telecharger-modeles")
     fichiers = lister_medias(dossier_media)
     if not fichiers:
@@ -69,55 +79,86 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
     # 4. reconnaissance de la parole ------------------------------------------
     cache = c["travail"] / "mots_asr.json"
     taille = c["audio"].stat().st_size
+    nom_modele = modele_reconnaissance(p)
     if (p.reprendre and cache.exists() and lire_json(cache).get("taille_audio") == taille
-            and lire_json(cache).get("modele") == Path(p.modele).name):
+            and lire_json(cache).get("modele") == Path(nom_modele).name):
         mots = [Mot(**m) for m in lire_json(cache)["mots"]]
-        log.info("Transcription Vosk existante réutilisée (%d mots).", len(mots))
+        log.info("Reconnaissance existante réutilisée (%d mots).", len(mots))
     else:
-        if transcripteur is None:
-            modele = charger_modele(p.modele)
+        if transcripteur is not None:
+            mots = transcripteur(c["audio"])
+        elif p.moteur == "vosk":
+            modele = charger_modele(nom_modele)
             mots = transcrire_wav(c["audio"], modele)
             del modele                      # libère la mémoire du grand modèle
         else:
-            mots = transcripteur(c["audio"])
-        ecrire_json(cache, {"taille_audio": taille, "modele": Path(p.modele).name,
+            from .asr_w2v import TranscripteurW2V
+            moteur = TranscripteurW2V(nom_modele)
+            mots = moteur.transcrire_wav(c["audio"])
+            del moteur
+        ecrire_json(cache, {"taille_audio": taille, "modele": Path(nom_modele).name,
                             "mots": [m.to_dict() for m in mots]})
     if not mots:
         raise RuntimeError("Aucun mot reconnu : vérifiez le son et le modèle.")
 
-    # 5. empreintes vocales et regroupement -----------------------------------
+    # 5. qui parle quand -------------------------------------------------------
     signal = wav_memmap(c["audio"])
-    fen = fenetres(regions_parole(mots), p.fenetre_s, p.pas_s)
-    if extracteur is None:
-        if p.empreinte == "mfcc":
-            extracteur = ExtracteurMFCC()
-        else:
-            # petit modèle : il ne sert qu'à faire tourner l'extracteur de x-vecteurs
-            leger = p.modele_leger if Path(p.modele_leger).exists() else p.modele
-            extracteur = ExtracteurVosk(p.modele_spk, charger_modele(leger))
-    log.info("Empreintes vocales (%s) sur %d fenêtres…", extracteur.nom, len(fen))
-    X, valides = extracteur.calculer(signal, fen)
-    fen = fen[valides]
-    profils = None
-    if p.poids_canaux > 0 and len(pistes) > 1:
-        profils = np.vstack([micros.profil(a, b) for a, b in fen])
-    Z = preparer(X, profils, p.poids_canaux)
-    res = classer(Z, k=p.nb_locuteurs, k_max=p.nb_max)
-    attrib = attribuer_mots(mots, fen, res)
-    for m, (g, s, mg) in zip(mots, attrib):
+    neurale = (p.diarisation == "neurale" and extracteur is None
+               and Path(p.modele_segmentation).exists() and Path(p.modele_wespeaker).exists())
+    if neurale:
+        from .segmentation import ExtracteurWeSpeaker, Segmenteur, attribuer_mots_tours, diariser
+        log.info("Diarisation : segmentation pyannote 3.0 + empreintes WeSpeaker…")
+        extracteur = ExtracteurWeSpeaker(p.modele_wespeaker)
+        resd = diariser(signal, duree, Segmenteur(p.modele_segmentation), extracteur,
+                        k=p.nb_locuteurs, k_max=p.nb_max, seuil_distance=p.seuil_voix)
+        attrib = attribuer_mots_tours(mots, resd, portee_s=float("inf"))
+        k_voix, centres_bruts, durees = resd.k, resd.centres_bruts, resd.durees
+        silhouette, silhouettes_k, n_fen = resd.silhouette, resd.silhouettes_k, resd.n_empreintes
+        nom_empreinte = extracteur.nom
+        seuil_marge = p.seuil_marge_activite
+    else:
+        fen = fenetres(regions_parole(mots), p.fenetre_s, p.pas_s)
+        if extracteur is None:
+            if p.empreinte == "mfcc":
+                extracteur = ExtracteurMFCC()
+            elif p.empreinte == "wespeaker" and Path(p.modele_wespeaker).exists():
+                from .segmentation import ExtracteurWeSpeaker
+                extracteur = ExtracteurWeSpeaker(p.modele_wespeaker)
+            else:
+                # petit modèle : il ne sert qu'à faire tourner l'extracteur de x-vecteurs
+                leger = p.modele_leger if Path(p.modele_leger).exists() else p.modele
+                extracteur = ExtracteurVosk(p.modele_spk, charger_modele(leger))
+        log.info("Empreintes vocales (%s) sur %d fenêtres…", extracteur.nom, len(fen))
+        X, valides = extracteur.calculer(signal, fen)
+        fen = fen[valides]
+        profils = None
+        if p.poids_canaux > 0 and len(pistes) > 1:
+            profils = np.vstack([micros.profil(a, b) for a, b in fen])
+        Z = preparer(X, profils, p.poids_canaux)
+        res = classer(Z, k=p.nb_locuteurs, k_max=p.nb_max)
+        attrib = attribuer_mots(mots, fen, res)
+        k_voix = res.k
+        durees = [sum(m.fin - m.debut for m, g in zip(mots, attrib[:, 0]) if g == kk) for kk in range(res.k)]
+        # empreintes moyennes brutes par groupe (pour le registre) ; X est ensuite effacé
+        Xn = normer(X)
+        centres_bruts = np.vstack([Xn[res.etiquettes == g].mean(axis=0) for g in range(res.k)])
+        silhouette, silhouettes_k, n_fen = res.silhouette, res.silhouettes_k, len(fen)
+        nom_empreinte = extracteur.nom
+        seuil_marge = p.seuil_marge
+        del X, Xn, Z
+    # tours trop brefs coincés entre deux tours d'une même autre voix
+    attrib[:, 0] = lisser_tours(mots, attrib[:, 0], p.tour_min_s)
+    for m, (g, s_, mg) in zip(mots, attrib):
         m.groupe = -1 if g != g else int(g)
-    durees = [sum(m.fin - m.debut for m in mots if m.groupe == g) for g in range(res.k)]
-    # empreintes moyennes brutes par groupe (pour le registre) ; X est ensuite effacé
-    Xn = normer(X)
-    centres_bruts = np.vstack([Xn[res.etiquettes == g].mean(axis=0) for g in range(res.k)])
-    del X, Xn, Z
 
     # 6. registre inter-sessions ----------------------------------------------
     registre = Registre(dossier_registre)
-    decisions = registre.apparier(session, centres_bruts, durees, extracteur.nom,
-                                  p.seuil_appariement, p.marge_appariement, p.duree_min_registre_s)
+    seuil = seuil_appariement(p, nom_empreinte)
+    log.info("Seuil d'appariement entre sessions : %.2f", seuil)
+    decisions = registre.apparier(session, centres_bruts, durees, nom_empreinte,
+                                  seuil, p.marge_appariement, p.duree_min_registre_s)
     correspondance = {d["groupe_local"]: d["speaker"] for d in decisions}
-    registre.enregistrer(session, centres_bruts, durees, correspondance, extracteur.nom)
+    registre.enregistrer(session, centres_bruts, durees, correspondance, nom_empreinte)
     sorties.ecrire_correspondances(decisions, session,
                                    c["validation"] / f"{session}_correspondances.csv")
 
@@ -138,9 +179,11 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
         "session": session, "date": date, "duree_session": duree,
         "fichiers": [str(f) for f in fichiers], "reference": str(ref_fichier),
         "medias": [[str(a), b] for a, b in medias],
-        "methode_empreinte": extracteur.nom, "fenetres": int(len(fen)),
-        "k": res.k, "k_impose": bool(p.nb_locuteurs), "silhouette": round(res.silhouette, 4),
-        "silhouettes_k": res.silhouettes_k, "micros": micros.resume(),
+        "methode_empreinte": nom_empreinte, "fenetres": int(n_fen),
+        "methode_diarisation": "segmentation pyannote 3.0 + WeSpeaker" if neurale else "fenêtres glissantes",
+        "moteur": p.moteur, "modele_reconnaissance": Path(nom_modele).name, "seuil_marge": seuil_marge,
+        "k": k_voix, "k_impose": bool(p.nb_locuteurs), "silhouette": round(silhouette, 4),
+        "silhouettes_k": silhouettes_k, "micros": micros.resume(),
         "decisions": decisions, "parametres": p.to_dict(),
     }
     ecrire_json(c["travail"] / "session.json", infos)
@@ -189,8 +232,10 @@ def produire(racine: Path, session: str, p: Parametres, nouveaux_extraits: bool 
         d["speaker"] = correspondance.get(d["groupe_local"], d["speaker"])
     a_verifier = {d["groupe_local"] for d in decisions if d["a_verifier"] == "oui"}
     segments = sorties.segmenter(mots, correspondance, p.pause_max_s)
-    sorties.signaler(segments, p, a_verifier)
-    sorties.ecrire_transcription(segments, session, infos["date"], c["session"])
+    p_ind = Parametres(**{**p.to_dict(), "seuil_marge": infos.get("seuil_marge", p.seuil_marge)})
+    sorties.signaler(segments, p_ind, a_verifier)
+    methode = "Vosk/Kaldi" if infos.get("moteur", "vosk") == "vosk" else "wav2vec 2.0 + CTC"
+    sorties.ecrire_transcription(segments, session, infos["date"], c["session"], methode)
     sorties.ecrire_locuteurs(segments, session, infos["date"], c["session"], Path(racine), decisions)
     sorties.ecrire_eaf_session(segments, c["session"] / f"{session}_transcription.eaf",
                                [tuple(m) for m in infos["medias"]])

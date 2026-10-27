@@ -48,9 +48,10 @@ xattr -dr com.apple.quarantine /Applications/Retranscription.app
 ## 2. Avant de commencer
 
 - **Ordinateur** : au moins 8 Go de mémoire vive. Sinon, cochez « Ordinateur
-  peu puissant » (transcription moins précise).
+  peu puissant » (modèle allégé, un peu moins précis).
 - **Internet** : nécessaire une seule fois, au premier lancement, pour
-  télécharger les modèles de reconnaissance (environ 1,5 Go).
+  télécharger les modèles de reconnaissance (environ 1,2 Go ; 400 Mo avec
+  « Ordinateur peu puissant »).
 - **Une session = un dossier** : mettez toutes les vidéos d'une même réunion
   dans un dossier. Plusieurs caméras ou micros : mettez tout ensemble,
   l'application les synchronise. Les vidéos ne sont jamais modifiées.
@@ -59,18 +60,24 @@ xattr -dr com.apple.quarantine /Applications/Retranscription.app
 
 ## 3. Transcrire (onglet 1)
 
-1. **Dossier des vidéos** : cliquez sur « Choisir… » et sélectionnez le dossier de la session.
+1. **Dossier des vidéos** : cliquez sur « Dossier… » et sélectionnez le dossier de la session.
+   Cette fenêtre n'affiche que les dossiers, pas les vidéos : c'est normal. Ouvrez le dossier
+   qui contient les vidéos, puis cliquez sur « Sélectionner un dossier ». Vous pouvez aussi
+   cliquer sur « Vidéo… » et choisir directement une des vidéos. Le journal, en bas, indique
+   les fichiers trouvés.
 2. **Vidéo de référence** : celle dont le début sert de temps 0. Prenez celle
    que vous utiliserez pour regarder la réunion.
 3. **Nom de la session** : court, sans espace (S01, S02…).
 4. **Date** de la réunion, au format AAAA-MM-JJ.
 5. **Personnes qui parlent** : participants et animateurs. Indiquez le nombre
    exact si vous le connaissez : c'est le réglage qui améliore le plus le résultat.
-6. **Dossiers de travail** : vérifiez où seront rangés les résultats. Évitez
+6. **Reconnaissance** : gardez « wav2vec 2.0 » (le plus juste). « Vosk » est
+   plus rapide mais fait plus d'erreurs.
+7. **Dossiers de travail** : vérifiez où seront rangés les résultats. Évitez
    OneDrive ou Dropbox (gros fichiers son).
-7. Cliquez sur **Transcrire**.
+8. Cliquez sur **Transcrire**.
 
-Durée : plusieurs heures pour une réunion de 6 h. Laissez l'ordinateur
+Durée : une à trois heures pour une réunion de 6 h, selon l'ordinateur. Laissez l'ordinateur
 branché et la fenêtre ouverte ; l'application empêche la mise en veille. Le
 journal, en bas de la fenêtre, montre l'avancement.
 
@@ -92,7 +99,10 @@ Dans le dossier des résultats, un dossier par session :
 | `S01_locuteurs.csv` | Une ligne par personne : temps de parole, nombre de tours… La colonne « sexe » est à remplir à la main |
 | `validation/` | Les contrôles de qualité (voir ci-dessous) |
 
-Le texte est **brut** : sans ponctuation ni majuscules, et non relu.
+Le texte est **brut** : sans ponctuation ni majuscules, et non relu. La
+reconnaissance écrit les mots lettre par lettre, comme elle les entend : un
+mot mal compris peut être mal orthographié, et les noms propres sont écrits
+comme ils se prononcent.
 
 ---
 
@@ -122,6 +132,11 @@ Le texte est **brut** : sans ponctuation ni majuscules, et non relu.
   Envoyez ce fichier à la personne qui vous a transmis l'application.
 - L'application se ferme pendant la transcription : la mémoire est sans doute
   insuffisante. Cochez « Ordinateur peu puissant ».
+- **Deux personnes ont le même numéro** dans une session : indiquez le nombre
+  exact de personnes qui parlent et relancez.
+- **Mise à jour depuis une version 0.2** : les empreintes vocales ont changé.
+  Les personnes reçoivent de nouveaux numéros ; pour repartir de Speaker 01,
+  choisissez un nouveau dossier « Empreintes vocales » (ou videz l'ancien).
 - Relancer une session déjà faite ne perd ni les extraits corrigés ni la colonne « sexe ».
 
 ---

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 import vosk
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_submodules
 
 datas, binaries, hiddenimports = [], [], []
 
@@ -22,15 +22,22 @@ for paquet in ("av", "jiwer", "rapidfuzz"):
     hiddenimports += h
 hiddenimports += collect_submodules("retranscription")
 
+# onnxruntime : moteur des réseaux wav2vec 2.0, segmentation et WeSpeaker
+binaries += collect_dynamic_libs("onnxruntime")
+hiddenimports += ["onnxruntime", "onnxruntime.capi._pybind_state"]
+
+# réseau wav2vec 2.0 miniature (poids aléatoires) pour l'auto-vérification
+donnees = [(str(f), str(f.parent)) for f in Path("retranscription/donnees").rglob("*") if f.is_file()]
+
 a = Analysis(
     ["app.py"],
     pathex=["."],
     binaries=binaries,
-    datas=datas + [(f, ".") for f in ("README.md", "GUIDE_UTILISATEUR.md", "GUIDE_UTILISATEUR.html")
+    datas=datas + donnees + [(f, ".") for f in ("README.md", "GUIDE_UTILISATEUR.md", "GUIDE_UTILISATEUR.html")
                    if Path(f).exists()],
     hiddenimports=hiddenimports,
     excludes=["matplotlib", "pandas", "IPython", "pytest", "PyQt5", "PyQt6", "PySide2", "PySide6",
-              "torch", "pyannote", "pympi", "notebook", "jupyter"],
+              "torch", "transformers", "onnx", "pyannote", "pympi", "notebook", "jupyter"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -46,7 +53,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Retranscription",
             "CFBundleDisplayName": "Retranscription",
-            "CFBundleShortVersionString": "0.2.0",
+            "CFBundleShortVersionString": "0.3.0",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "14.0",
         },

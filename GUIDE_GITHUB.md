@@ -45,6 +45,24 @@ puis **Commit changes**.
    rouge (Windows ou Mac), ouvrez l'étape en rouge et copiez son texte.
    Envoyez-le-moi : je corrigerai.
 
+## 3 bis. Préparer les modèles (une seule fois)
+
+L'application télécharge ses modèles au premier lancement. Le modèle de
+reconnaissance wav2vec 2.0 doit d'abord être converti et publié sur votre
+dépôt. GitHub le fait pour vous :
+
+1. Onglet **Actions**. Dans la colonne de gauche, cliquez sur
+   **Préparer les modèles**.
+2. À droite, cliquez sur **Run workflow**, puis sur le bouton vert
+   **Run workflow** (ne changez pas le nom du modèle).
+3. Attendez la coche verte (20 à 40 minutes).
+4. Vérifiez : page d'accueil du dépôt > **Releases**. La page
+   **Modèles (ne pas supprimer)** contient notamment `wav2vec2-fr.zip`
+   (environ 1,2 Go) et `segmentation-3.0.onnx`.
+
+Ne supprimez jamais cette page : les applications y téléchargent leurs
+modèles. Il n'est pas nécessaire de recommencer à chaque nouvelle version.
+
 ## 4. Récupérer les deux applications
 
 ### Pour un essai rapide
@@ -58,8 +76,8 @@ Décompressez une fois.
 
 1. Sur la page d'accueil du dépôt, à droite, cliquez sur **Releases**, puis
    **Create a new release**.
-2. **Choose a tag** : tapez `v0.2.0`, puis **Create new tag**.
-3. **Release title** : `Retranscription 0.2.0`. Cliquez sur **Publish release**.
+2. **Choose a tag** : tapez `v0.3.0`, puis **Create new tag**.
+3. **Release title** : `Retranscription 0.3.0`. Cliquez sur **Publish release**.
 4. La fabrication se relance (15 à 25 minutes). Les deux fichiers
    `Retranscription-Windows.zip` et `Retranscription-Mac.zip` apparaissent
    ensuite sur la page de la version, rubrique **Assets**.
@@ -76,7 +94,7 @@ chaque .zip.
 1. **Add file** > **Upload files** : glissez les fichiers modifiés (ils
    remplacent les anciens), puis **Commit changes**.
 2. Créez une nouvelle version comme au point 4, avec le numéro suivant
-   (`v0.2.1`, `v0.3.0`…).
+   (`v0.3.1`, `v0.4.0`…).
 
 ---
 
@@ -87,6 +105,8 @@ chaque .zip.
 - **Applications non signées** : Windows et macOS affichent un avertissement
   au premier lancement. `GUIDE_UTILISATEUR.html` explique quoi faire.
 - **Taille** : environ 150 à 250 Mo par fichier. Les modèles de
-  reconnaissance (1,5 Go) se téléchargent au premier lancement, sur
+  reconnaissance (1,2 Go) se téléchargent au premier lancement, sur
   l'ordinateur de chaque utilisateur.
+- **Version « latest »** : la page des modèles n'est jamais marquée comme
+  dernière version ; le lien « Latest release » mène bien à l'application.
 - **Coût** : gratuit pour un dépôt public.

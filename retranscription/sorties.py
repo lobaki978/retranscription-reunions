@@ -111,7 +111,8 @@ def _f(x, n=3):
     return "" if x is None or x != x else round(float(x), n)
 
 
-def ecrire_transcription(segments: List[Segment], session: str, date: str, dossier: Path) -> None:
+def ecrire_transcription(segments: List[Segment], session: str, date: str, dossier: Path,
+                         methode: str = "wav2vec 2.0 + CTC") -> None:
     lignes = [[session, date, s.tour, s.rang, s.speaker, _f(s.debut), _f(s.fin),
                hms(s.debut), hms(s.fin), _f(s.duree), s.texte, len(s.mots), _f(s.moyenne(s.confs))]
               for s in segments]
@@ -120,7 +121,7 @@ def ecrire_transcription(segments: List[Segment], session: str, date: str, dossi
                  "debut", "fin", "duree_s", "texte", "n_mots", "conf_moy"], lignes)
     with open(dossier / f"{session}_transcription.txt", "w", encoding="utf-8") as f:
         f.write(f"Session {session} — {date}\n")
-        f.write("Transcription automatique (Vosk/Kaldi), locuteurs pseudonymisés.\n")
+        f.write(f"Transcription automatique ({methode}), locuteurs pseudonymisés.\n")
         f.write("Texte non relu : voir le dossier validation/.\n\n")
         for s in segments:
             f.write(f"[{hms(s.debut, ms=False)}] {s.speaker} : {s.texte}\n\n")

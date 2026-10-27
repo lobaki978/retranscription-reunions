@@ -3,7 +3,12 @@
 Utilisée après chaque fabrication automatique (GitHub Actions) : elle
 vérifie que toutes les bibliothèques sont bien incluses, puis fait tourner
 toute la chaîne sur un enregistrement synthétique de deux voix, avec une
-transcription simulée (les modèles Vosk ne sont pas téléchargés ici).
+transcription simulée (les grands modèles ne sont pas téléchargés ici).
+
+Le décodage wav2vec 2.0 est vérifié avec un réseau miniature (poids
+aléatoires, même architecture) livré avec l'application. La diarisation
+neurale est vérifiée si les modèles de segmentation et d'empreintes sont
+présents dans le dossier des modèles.
 """
 
 import shutil
@@ -73,6 +78,57 @@ def _enregistrement(dossier: Path, duree=90.0, graine=0):
     return chemin, mots
 
 
+def _signal(chemin: Path) -> np.ndarray:
+    from .audio import extraire_pistes
+    piste = extraire_pistes([chemin], chemin.parent / "_pistes")[0]
+    return np.fromfile(piste.chemin, dtype="<i2")
+
+
+def _verifier_w2v(note, chemin: Path) -> None:
+    """Décodage CTC avec le réseau miniature : comparé à un décodage de référence."""
+    try:
+        from .asr_w2v import TranscripteurW2V
+        mini = Path(__file__).resolve().parent / "donnees" / "w2v_mini"
+        if not (mini / "model.onnx").exists():
+            note("wav2vec 2.0 (réseau miniature)", False, f"absent : {mini}")
+            return
+        t = TranscripteurW2V(mini)
+        x = _signal(chemin)[: 45 * TAUX]
+        ids, probs = t.trames(x, bloc_s=20.0)
+        attendu = len(x) // t.ept
+        # référence : tout le signal d'un seul tenant, argmax direct
+        ref = t._logits(x).argmax(axis=1)
+        n = min(len(ids), len(ref))
+        accord = float((ids[:n] == ref[:n]).mean())
+        mots = t.decoder(ids, probs)
+        note("wav2vec 2.0 (réseau miniature)", abs(len(ids) - attendu) <= 2 and accord > 0.9,
+             f"{len(ids)} trames (attendu {attendu}), accord par blocs {100 * accord:.0f} %, {len(mots)} mots")
+    except Exception:
+        note("wav2vec 2.0 (réseau miniature)", False, traceback.format_exc())
+
+
+def _verifier_neurale(note, chemin: Path, verite) -> None:
+    from .config import Parametres
+    p = Parametres()
+    if not (Path(p.modele_segmentation).exists() and Path(p.modele_wespeaker).exists()):
+        note("diarisation neurale", True, "non vérifiée : modèles absents (téléchargés au premier lancement)")
+        return
+    try:
+        from .asr import Mot
+        from .segmentation import ExtracteurWeSpeaker, Segmenteur, attribuer_mots_tours, diariser
+        x = _signal(chemin)
+        res = diariser(x, len(x) / TAUX, Segmenteur(p.modele_segmentation),
+                       ExtracteurWeSpeaker(p.modele_wespeaker), k=2)
+        mots = [Mot(m["debut"], m["fin"], m["mot"], 0.9) for m in verite]
+        g = attribuer_mots_tours(mots, res, portee_s=float("inf"))[:, 0]
+        premier = g[0]
+        bons = sum((gi == premier) == (m["locuteur"] == verite[0]["locuteur"]) for gi, m in zip(g, verite))
+        exact = bons / len(verite)
+        note("diarisation neurale", exact > 0.8, f"{len(res.tours)} tours, {100 * exact:.0f} % des mots")
+    except Exception:
+        note("diarisation neurale", False, traceback.format_exc())
+
+
 def verifier(chemin_rapport=None) -> int:
     lignes, ok = [], True
 
@@ -91,7 +147,7 @@ def verifier(chemin_rapport=None) -> int:
             note("bibliothèque Vosk", True, "chargée")
     except Exception as e:
         note("bibliothèque Vosk", False, repr(e))
-    for nom in ("av", "numpy", "scipy", "sklearn", "jiwer"):
+    for nom in ("av", "numpy", "scipy", "sklearn", "jiwer", "onnxruntime"):
         try:
             __import__(nom)
             note(f"module {nom}", True)
@@ -113,7 +169,8 @@ def verifier(chemin_rapport=None) -> int:
         medias.mkdir()
         chemin, verite = _enregistrement(medias)
         note("enregistrement de test", True, chemin.name)
-        p = Parametres(empreinte="mfcc", nb_locuteurs=2, n_extraits=1, duree_extrait_s=20)
+        p = Parametres(diarisation="fenetres", empreinte="mfcc", nb_locuteurs=2, n_extraits=1,
+                       duree_extrait_s=20)
         transcrire_session(medias, "TEST", "2026-01-01", tmp / "resultats", tmp / "registre", p,
                            transcripteur=lambda _: [Mot(m["debut"], m["fin"], m["mot"], 0.9) for m in verite])
         segs = lire_csv(tmp / "resultats" / "TEST" / "TEST_transcription.csv")
@@ -131,6 +188,8 @@ def verifier(chemin_rapport=None) -> int:
         note("attribution des voix", exact > 0.8, f"{100 * exact:.0f} % des mots")
         note("fichier ELAN", (tmp / "resultats" / "TEST" / "TEST_transcription.eaf").exists())
         note("évaluation", evaluer(tmp / "resultats", "TEST") == {}, "extraits non corrigés détectés")
+        _verifier_w2v(note, chemin)
+        _verifier_neurale(note, chemin, verite)
     except Exception:
         note("chaîne complète", False, traceback.format_exc())
     finally:

@@ -334,6 +334,9 @@ def ecrire_synthese(dossier_val: Path, session: str, infos: dict, segments: List
         "mots": len(mots),
         "confiance_moyenne": round(sum(confs) / len(confs), 4) if confs else None,
         "part_mots_conf_inf_0.5": round(sum(c < 0.5 for c in confs) / len(confs), 4) if confs else None,
+        "moteur": infos.get("moteur", "vosk"),
+        "modele_reconnaissance": infos.get("modele_reconnaissance", ""),
+        "methode_diarisation": infos.get("methode_diarisation", "fenêtres glissantes"),
         "methode_empreinte": infos["methode_empreinte"],
         "fenetres": infos["fenetres"],
         "groupes_de_voix": infos["k"],
@@ -354,9 +357,14 @@ def ecrire_synthese(dossier_val: Path, session: str, infos: dict, segments: List
     if confs:
         L.append(f"Mots reconnus : {len(mots)} ; confiance moyenne {synth['confiance_moyenne']:.2f} ; "
                  f"{100 * synth['part_mots_conf_inf_0.5']:.1f} % des mots sous 0,5")
-    L.append(f"Empreintes : {synth['methode_empreinte']} sur {synth['fenetres']} fenêtres")
+    neurale = synth["methode_diarisation"].startswith("segmentation")
+    L.append(f"Reconnaissance de la parole : {synth['moteur']} ({synth['modele_reconnaissance']})")
+    L.append(f"Diarisation : {synth['methode_diarisation']}")
+    L.append(f"Empreintes : {synth['methode_empreinte']} sur {synth['fenetres']} "
+             + ("locuteurs locaux (fenêtres de 10 s)" if neurale else "fenêtres"))
+    estime = " (estimé par seuil de distance)" if neurale else " (estimé par l'écart propre normalisé)"
     L.append(f"Groupes de voix : {synth['groupes_de_voix']}"
-             + (" (nombre imposé)" if synth["nombre_voix_impose"] else " (estimé par l'écart propre normalisé)"))
+             + (" (nombre imposé)" if synth["nombre_voix_impose"] else estime))
     L.append(f"Silhouette du regroupement : {synth['silhouette']:.3f} (de -1 à 1 ; repères de "
              "Kaufman & Rousseeuw, 1990 : > 0,50 structure raisonnable, 0,26-0,50 faible, "
              "<= 0,25 absente)")
