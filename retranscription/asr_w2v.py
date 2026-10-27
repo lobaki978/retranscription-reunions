@@ -46,8 +46,8 @@ class TranscripteurW2V:
         self.sep = cfg.get("separateur", "|")
         self.normaliser = bool(cfg.get("normaliser", True))
         self.ept = int(cfg.get("echantillons_par_trame", 320))
-        self.speciaux = {i for i, t in self.vocab.items()
-                         if t.startswith("<") and t.endswith(">") and i != self.vide}
+        # symboles spéciaux ([UNK], <s>, </s>…) : tout ce qui n'est pas un caractère unique
+        self.speciaux = {i for i, t in self.vocab.items() if len(t) != 1 and i != self.vide}
         self.nom = Path(dossier).name
 
     # ------------------------------------------------------------------
