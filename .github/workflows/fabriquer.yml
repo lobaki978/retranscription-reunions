@@ -6,7 +6,7 @@
 # l'exécution, rubrique « Artifacts ».
 #
 # Pour publier une version téléchargeable par tous : page « Releases » >
-# « Create a new release » (étiquette v0.2.0 par exemple) > « Publish release ».
+# « Create a new release » (étiquette v0.3.0 par exemple) > « Publish release ».
 # Les deux .zip sont alors ajoutés automatiquement à cette page.
 
 name: Fabriquer l'application
@@ -50,7 +50,12 @@ jobs:
           pip install -r requirements.txt pyinstaller markdown
 
       - name: Tests rapides
-        run: python tests/test_vosk_simule.py
+        run: |
+          python tests/test_vosk_simule.py
+          python tests/test_w2v.py
+
+      - name: Modèles de diarisation (pour la vérification)
+        run: python -c "from pathlib import Path; from retranscription.telecharger import telecharger; telecharger(Path('modeles_verif'), ['segmentation-3.0.onnx', 'wespeaker-resnet34.onnx'])"
 
       - name: Guide en HTML
         run: python outils/guide_html.py
@@ -61,6 +66,8 @@ jobs:
       - name: Vérifier l'application fabriquée (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          RETRANSCRIPTION_MODELES: ${{ github.workspace }}/modeles_verif
         run: |
           $p = Start-Process -FilePath "dist\Retranscription\Retranscription.exe" `
                 -ArgumentList "--verifier", "$PWD\rapport.txt" -Wait -PassThru
@@ -69,6 +76,8 @@ jobs:
 
       - name: Vérifier l'application fabriquée (Mac)
         if: runner.os == 'macOS'
+        env:
+          RETRANSCRIPTION_MODELES: ${{ github.workspace }}/modeles_verif
         run: |
           dist/Retranscription.app/Contents/MacOS/Retranscription --verifier "$PWD/rapport.txt"
           cat rapport.txt

@@ -1,0 +1,96 @@
+# Préparation des modèles neuronaux (à lancer UNE fois, à la main).
+#
+# Onglet « Actions » > « Préparer les modèles » > « Run workflow ».
+# Durée : 20 à 40 minutes.
+#
+# Le workflow :
+#   1. télécharge le modèle wav2vec 2.0 français (Hugging Face) ;
+#   2. le convertit au format ONNX (32 bits et version allégée 8 bits),
+#      en vérifiant que les sorties sont identiques à celles de PyTorch ;
+#   3. récupère les modèles de segmentation (pyannote 3.0) et d'empreintes
+#      vocales (WeSpeaker ResNet34), déjà au format ONNX ;
+#   4. publie le tout sur la page « modeles-1 » du dépôt (rubrique Releases).
+#
+# L'application télécharge ensuite ces fichiers au premier lancement,
+# sans PyTorch ni compte Hugging Face.
+
+name: Préparer les modèles
+
+on:
+  workflow_dispatch:
+    inputs:
+      modele:
+        description: "Modèle wav2vec 2.0 + CTC (Hugging Face)"
+        default: "bofenghuang/asr-wav2vec2-ctc-french"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  preparer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Libérer de la place sur le disque
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Installer PyTorch (version processeur) et les outils de conversion
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch==2.14.*" --index-url https://download.pytorch.org/whl/cpu
+          pip install -r outils/requirements-export.txt
+
+      - name: Convertir wav2vec 2.0 au format ONNX
+        run: python outils/exporter_wav2vec2.py --modele "${{ inputs.modele }}" --sortie modeles_export --zip
+
+      - name: Récupérer les modèles de diarisation
+        run: |
+          K2=https://github.com/k2-fsa/sherpa-onnx/releases/download
+          curl -fL -o seg.tar.bz2 "$K2/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+          tar xjf seg.tar.bz2
+          cp sherpa-onnx-pyannote-segmentation-3-0/model.onnx modeles_export/segmentation-3.0.onnx
+          cp sherpa-onnx-pyannote-segmentation-3-0/LICENSE modeles_export/LICENCE-segmentation-3.0.txt
+          curl -fL -o modeles_export/wespeaker-resnet34.onnx \
+            "$K2/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx"
+          ls -la modeles_export
+
+      - name: Vérifier les modèles avec l'application
+        env:
+          RETRANSCRIPTION_MODELES: ${{ github.workspace }}/modeles_export
+        run: |
+          pip install -r requirements.txt
+          python -m retranscription.autotest rapport.txt
+          python - <<'EOF'
+          import numpy as np
+          from retranscription.asr_w2v import TranscripteurW2V
+          for nom in ("wav2vec2-fr", "wav2vec2-fr-int8"):
+              t = TranscripteurW2V(f"modeles_export/{nom}")
+              x = (np.random.default_rng(0).standard_normal(16000 * 70) * 300).astype("<i2")
+              ids, probs = t.trames(x)
+              print(nom, ": trames", len(ids), "attendu", len(x) // t.ept)
+              assert abs(len(ids) - len(x) // t.ept) <= 2
+          EOF
+
+      - name: Publier sur la page « modeles-1 »
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view modeles-1 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create modeles-1 --repo "$GITHUB_REPOSITORY" --title "Modèles (ne pas supprimer)" \
+              --notes-file outils/NOTES_MODELES.md --latest=false
+          fi
+          gh release upload modeles-1 --repo "$GITHUB_REPOSITORY" --clobber \
+            modeles_export/wav2vec2-fr.zip modeles_export/wav2vec2-fr-int8.zip \
+            modeles_export/segmentation-3.0.onnx modeles_export/wespeaker-resnet34.onnx \
+            modeles_export/LICENCE-segmentation-3.0.txt
