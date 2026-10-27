@@ -1,3 +1,0 @@
-Réseau wav2vec 2.0 miniature à poids aléatoires (aucune reconnaissance réelle).
-Sert uniquement à l'auto-vérification de l'application (option --verifier).
-Produit par : python tests/test_w2v.py --mini

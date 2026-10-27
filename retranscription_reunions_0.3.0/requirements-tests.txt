@@ -1,3 +1,0 @@
--r requirements.txt
-pyannote.metrics>=3.2
-pympi-ling>=1.70

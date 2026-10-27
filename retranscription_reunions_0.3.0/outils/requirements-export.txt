@@ -1,6 +1,0 @@
-# Outils de conversion du modèle wav2vec 2.0 (workflow « Préparer les modèles »).
-# PyTorch est installé à part (version processeur).
-transformers>=4.40,<6     # essayé avec 5.21
-onnx>=1.16
-onnxruntime>=1.17
-numpy>=1.24
