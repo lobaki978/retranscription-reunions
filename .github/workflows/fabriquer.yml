@@ -6,7 +6,7 @@
 # l'exécution, rubrique « Artifacts ».
 #
 # Pour publier une version téléchargeable par tous : page « Releases » >
-# « Create a new release » (étiquette v0.3.0 par exemple) > « Publish release ».
+# « Draft a new release » (étiquette v0.4.0 par exemple) > « Publish release ».
 # Les deux .zip sont alors ajoutés automatiquement à cette page.
 
 name: Fabriquer l'application
@@ -49,10 +49,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller markdown
 
+      # Décodage avec modèle de langue : pyctcdecode (sans ses dépendances : il
+      # imposerait numpy < 2) et KenLM (compilé ici). En cas d'échec, l'application
+      # fonctionne quand même, avec le décodage glouton (voir le rapport de vérification).
+      - name: Modèle de langue (pyctcdecode, KenLM)
+        continue-on-error: true
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+        run: |
+          pip install --no-deps pyctcdecode==0.5.0 "pygtrie>=2.1,<3"
+          pip install kenlm
+          python -c "import kenlm, pyctcdecode; print('KenLM et pyctcdecode installés')"
+
       - name: Tests rapides
         run: |
           python tests/test_vosk_simule.py
           python tests/test_w2v.py
+          python tests/test_langue.py
 
       - name: Modèles de diarisation (pour la vérification)
         run: python -c "from pathlib import Path; from retranscription.telecharger import telecharger; telecharger(Path('modeles_verif'), ['segmentation-3.0.onnx', 'wespeaker-resnet34.onnx'])"
