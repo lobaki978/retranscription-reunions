@@ -6,16 +6,20 @@ attribuer chaque prise de parole à un locuteur pseudonymisé (« Speaker 01 »,
 
 Aucun modèle génératif n'est utilisé (ni Whisper, ni LLM). Les réseaux
 employés sont des classifieurs : ils attribuent une étiquette à chaque
-trame de son, sans produire de texte à partir du texte déjà produit.
+trame de son, sans produire de texte à partir du texte déjà produit. Le
+modèle de langue est un modèle n-gramme : des fréquences de suites de
+mots comptées dans un corpus, comme celui de Vosk/Kaldi.
 
 | Étape | Méthode | Référence |
 |---|---|---|
-| Transcription (par défaut) | wav2vec 2.0 affiné pour le français, décodage CTC glouton (un caractère par trame de 20 ms) | Baevski et al. (2020) ; Graves et al. (2006) ; Evain et al. (2021) |
+| Transcription (par défaut) | wav2vec 2.0 affiné pour le français : une probabilité par caractère et par trame de 20 ms (CTC) | Baevski et al. (2020) ; Graves et al. (2006) ; Evain et al. (2021) |
+| Décodage | recherche par faisceau CTC avec modèle de langue 5-grammes (KenLM) et lexique du projet facultatif ; à défaut, décodage glouton | Hannun et al. (2014) ; Heafield (2011) ; Jelinek (1997) |
 | Transcription (option) | Vosk (Kaldi) : modèle acoustique TDNN, lexique fermé, modèle de langue n-gramme | Povey et al. (2011) |
 | Qui parle dans chaque fenêtre de 10 s | segmentation pyannote 3.0 (« powerset », 3 voix au plus par fenêtre) | Plaquet & Bredin (2023) ; Bredin (2023) |
 | Empreinte vocale | WeSpeaker ResNet34 (réseau discriminatif, ne produit ni texte ni son) | Wang et al. (2023) |
-| Regroupement des voix | CAH, lien moyen, distance cosinus ; voix d'une fenêtre jamais regroupées ensemble | Sell et al. (2018) ; Bredin (2023) |
+| Regroupement des voix | CAH, lien moyen, distance cosinus ; voix d'une fenêtre jamais regroupées ensemble ; groupes de moins de 6 empreintes rattachés à la voix la plus proche (règle de pyannote 3.1) | Sell et al. (2018) ; Bredin (2023) |
 | Nombre de voix (si non fourni) | seuil de distance cosinus (0,75) | Bredin (2023) |
+| Position des micros (option) | profil d'énergie des micros ajouté aux empreintes vocales | |
 | Tours trop brefs | durée minimale d'un tour (1 s) | |
 | Appariement entre sessions | affectation optimale (méthode hongroise) | Kuhn (1955) |
 | Validation | WER (Levenshtein), DER (définition NIST) | Morris et al. (2004) ; Fiscus et al. (2006) |
@@ -37,6 +41,25 @@ anglais, 2 à 4 locuteurs ; `tests/test_diarisation_neurale.py`) :
 Ces extraits sont très courts (peu de parole par voix) : sur une réunion
 entière, chaque voix est mieux connue. Seule la mesure sur vos propres
 extraits corrigés (section 3) vaut pour vos données.
+
+**Essais de la version 0.4** (scripts de test ; chiffres à confirmer sur vos données) :
+
+- *Réunion à nombreux participants* : les 10 extraits AMI mis bout à bout
+  (5,3 min, 24 personnes). Nombre de voix estimé : 28 sans rattachement des
+  petits groupes, 20 avec ; DER 22,9 % → 22,3 %. Le regroupement de
+  pyannote 3.1 tel quel (lien centroïde, seuil 0,7046, taille minimale 12)
+  a été porté et essayé : il fusionne les personnes qui parlent peu
+  (DER 28,0 % avec 24 voix demandées, 36,4 % en estimant le nombre) ; il
+  reste disponible (`--regroupement pyannote31`).
+- *Salle simulée* (réverbération 0,6 s + bruit de fond) : le DER monte à
+  66 % (bruit à 10 dB) et 85 % (5 dB), surtout parce que la parole n'est
+  plus détectée. Le choix des micros compte plus que les réglages.
+- *Modèle de langue* : 60 phrases françaises lues par une voix de synthèse,
+  en salle simulée, avec un petit modèle de langue de test (trigrammes,
+  95 000 phrases de Common Voice ne contenant pas les phrases de test) :
+  WER 29,3 % → 24,3 % (bruit à 10 dB) et 55,3 % → 50,7 % (5 dB) ; les
+  non-mots et les mots collés disparaissent. Le modèle 5-grammes livré
+  est bien plus grand ; son effet sur vos réunions reste à mesurer.
 
 **Trois façons de l'utiliser :**
 
@@ -76,12 +99,30 @@ Le téléchargement place dans `modeles/` :
   ONNX à partir de [bofenghuang/asr-wav2vec2-ctc-french](https://huggingface.co/bofenghuang/asr-wav2vec2-ctc-french)
   (Apache 2.0) ; ou `wav2vec2-fr-int8` avec `--petit` (poids en 8 bits, plus
   rapide, un peu moins précis) ;
+- `lm-fr-5gram` : modèle de langue 5-grammes (KenLM, ~1 Go) publié avec le
+  modèle de reconnaissance (`lm_5gram_big.bin`, `unigrams.txt`, `attrs.json`) ;
+  `--sans-modele-langue` pour ne pas le télécharger ;
 - `segmentation-3.0.onnx` : segmentation des locuteurs (pyannote 3.0, MIT) ;
 - `wespeaker-resnet34.onnx` : empreintes vocales (WeSpeaker, CC BY 4.0).
 
 Ces fichiers viennent de la page « modeles-1 » du dépôt GitHub, préparée
-une fois par le workflow « Préparer les modèles » (voir `GUIDE_GITHUB.md`).
+par le workflow « Préparer les modèles » (voir `GUIDE_GITHUB.md`).
 Pour Vosk : `telecharger-modeles --moteur vosk`.
+
+**Modèle de langue : deux bibliothèques en plus.** pyctcdecode (recherche par
+faisceau) et KenLM (lecture du modèle). pyctcdecode s'installe sans ses
+dépendances, car il impose une ancienne version de numpy dont il n'a pas
+besoin ; KenLM doit être compilé :
+
+```bash
+pip install --no-deps pyctcdecode==0.5.0 "pygtrie>=2.1,<3"
+pip install kenlm        # Windows : « Outils de génération Visual Studio » nécessaires
+```
+
+Sous Anaconda, `conda install -c conda-forge kenlm` évite la compilation
+si le paquet existe pour votre système. Sans ces bibliothèques, l'outil
+fonctionne avec le décodage glouton et le signale dans le journal.
+L'application fabriquée par GitHub les contient déjà.
 
 Mémoire et durée, mesurées avec un réseau de même taille (24 couches,
 315 millions de paramètres) sur un processeur à 2 cœurs : environ 3 Go de
@@ -216,7 +257,7 @@ python -m retranscription effacer-registre --confirmer
 ```
 sorties/S01/
   S01_transcription.csv     une ligne par segment de parole
-  S01_transcription.txt     version lisible
+  S01_transcription.txt     version lisible : un paragraphe par prise de parole
   S01_transcription.eaf     ELAN : une piste par locuteur + piste « à vérifier »
   S01_locuteurs.csv         métadonnées ; colonne « sexe » à remplir à la main
   S01_audio.wav             signal composite (meilleur micro à chaque instant)
@@ -230,8 +271,10 @@ registre/                   empreintes moyennes par locuteur : NE PAS PARTAGER
 ```
 
 **Segment et tour.** Un segment est une suite de mots d'un même locuteur
-sans pause de plus de 2 s (`--pause-max`). Le numéro de tour ne change qu'au
-changement de locuteur.
+sans pause de plus de 2 s (`--pause-max`) ; au-delà de 30 s, il est coupé à
+la pause suivante. Le numéro de tour ne change qu'au changement de
+locuteur. Dans le `.txt`, le locuteur n'est écrit qu'au début de chaque
+tour ; les segments suivants du même tour sont en retrait, avec leur heure.
 
 **Métadonnées.** La colonne `sexe` de `S01_locuteurs.csv` est conservée quand
 le fichier est régénéré. Une valeur saisie pour un locuteur est reprise
@@ -257,27 +300,65 @@ tr <- read.csv("sorties/S01/S01_transcription.csv", sep = ";", fileEncoding = "U
 | `--reference` | 1er fichier | fichier qui fixe le temps 0 |
 | `--moteur` | wav2vec2 | `vosk` : plus rapide, moins précis |
 | `--petit` | non | modèle allégé (8 bits pour wav2vec 2.0) |
+| `--lexique` | aucun | fichier texte : termes du projet favorisés au décodage (voir ci-dessous) |
+| `--sans-modele-langue` | non | décodage glouton, comme la version 0.3 |
+| `--faisceau` | 64 | largeur du faisceau (plus large : un peu plus juste, plus lent) |
 | `--seuil-voix` | 0,75 | distance cosinus de coupure quand le nombre de voix est estimé ; plus petit = plus de voix |
 | `--seuil-appariement` | 0,5 (WeSpeaker), 0,7 (Vosk, MFCC) | cosinus minimal pour reconnaître un locuteur d'une autre session |
 | `--diarisation` | neurale | `fenetres` : ancienne méthode par fenêtres glissantes |
 | `--empreinte` | wespeaker | empreintes de la méthode `fenetres` : `vosk` ou `mfcc` |
-| `--poids-canaux` | 0 | méthode `fenetres` : part de la position (énergie par micro), de 0 à 1 |
+| `--poids-canaux` | 0 | part de la position (énergie de chaque micro) dans le regroupement des voix, de 0 à 1 ; 0,3 si un micro est proche de chaque participant (case « Un micro près de chaque participant » de l'application) |
+| `--taille-min-voix` | 6 | groupe de moins d'empreintes rattaché à la voix la plus proche |
+| `--regroupement` | moyen | `pyannote31` : regroupement de pyannote 3.1 tel quel |
 | `--pause-max` | 2 s | pause qui coupe un segment |
 | `--extraits`, `--duree-extrait` | 10, 120 s | échantillon de validation |
 
 Pour comparer deux réglages (par exemple `--poids-canaux 0` et `0.3`), comparez
 leur DER sur les mêmes extraits corrigés.
 
+### Lexique du projet
+
+Un fichier texte (UTF-8), un terme par ligne : noms de lieux, sigles, mots
+du domaine, expressions. Les lignes qui commencent par `#` sont ignorées.
+Ces termes reçoivent un bonus pendant le décodage, même s'ils sont absents
+du modèle de langue. Quelques centaines de termes suffisent ; un lexique
+trop long favorise des mots qui n'ont pas été prononcés.
+
+Avec R et UDPipe (Wijffels, 2023 ; Straka & Straková, 2017), à partir des
+documents du projet (comptes rendus, supports d'atelier) :
+
+```r
+library(udpipe)
+m <- udpipe_download_model(language = "french-gsd")    # une seule fois
+modele <- udpipe_load_model(m$file_model)
+fichiers <- list.files("documents_projet", pattern = "\\.txt$", full.names = TRUE)
+textes <- vapply(fichiers, function(f) paste(readLines(f, encoding = "UTF-8"), collapse = " "), "")
+ann <- as.data.frame(udpipe_annotate(modele, x = textes, doc_id = basename(fichiers)))
+mots <- subset(ann, upos %in% c("NOUN", "PROPN", "ADJ") & nchar(token) > 3)
+freq <- sort(table(tolower(mots$token)), decreasing = TRUE)   # formes, pas lemmes : on entend des formes
+con <- file("lexique.txt", encoding = "UTF-8")
+writeLines(names(freq)[seq_len(min(300, length(freq)))], con)
+close(con)
+```
+
+Relisez la liste avant de l'utiliser : retirez les mots courants, ajoutez
+les expressions (« filière textile ») et les noms propres oubliés.
+
 ## 7. Limites connues
 
 - **Parole superposée** : un seul locuteur est attribué à chaque mot.
-- **Parole spontanée, micros éloignés** : la reconnaissance fait plus
-  d'erreurs qu'en parole lue. Le WER mesuré sur vos extraits est la seule
-  estimation fiable.
-- **Orthographe** (wav2vec 2.0) : le texte est écrit lettre par lettre, sans
-  lexique ni modèle de langue. Un mot mal entendu peut donc être mal
-  orthographié (« prestatère ») ; les noms propres sont écrits comme ils se
-  prononcent. Ces mots ont en général une confiance faible.
+- **Micros éloignés** : c'est la première cause d'erreur. Sur le corpus AMI,
+  le même système fait deux fois plus d'erreurs avec un micro de table
+  qu'avec un micro-casque (WER 45 % contre 22 % ; Peddinti et al., 2016).
+  Un micro près de chaque participant (enregistreur multipiste) améliore
+  à la fois le texte et la reconnaissance des voix. Le WER mesuré sur vos
+  extraits est la seule estimation fiable.
+- **Orthographe** (wav2vec 2.0) : avec le modèle de langue, les mots écrits
+  existent ; un mot mal entendu peut alors être remplacé par un autre mot,
+  plausible mais faux. Sans modèle de langue, le texte est écrit lettre par
+  lettre et un mot mal entendu peut être mal orthographié (« prestatère »).
+  Les noms propres absents du modèle de langue sont mieux reconnus s'ils
+  sont dans le lexique du projet.
 - **Mots hors lexique** (Vosk) : remplacés par le mot le plus proche de son lexique.
 - **Ponctuation et majuscules** : ni wav2vec 2.0 ni Vosk n'en produisent.
 - **Seuils** : seuils de voix et d'appariement, indicateurs de doute : à
@@ -300,6 +381,7 @@ leur DER sur les mêmes extraits corrigés.
 pip install -r requirements-tests.txt
 python tests/test_vosk_simule.py          # appels à Vosk (bibliothèque simulée), téléchargements
 python tests/test_w2v.py                  # décodage CTC, blocs de 30 s ; conversion ONNX si PyTorch est installé
+python tests/test_langue.py               # modèle de langue et lexique (petit modèle ARPA de test)
 python tests/test_diarisation_neurale.py  # vraies réunions (AMI) : DER et attribution des mots
 python tests/test_bout_en_bout.py         # 2 sessions simulées, 3 caméras, 4 micros
 python -m retranscription.autotest        # auto-vérification (aussi : Retranscription --verifier)
@@ -326,6 +408,9 @@ la reconnaissance dépend de l'ordinateur ; elle est à mesurer sur l'essai cour
 
 - Baevski, A., Zhou, H., Mohamed, A. & Auli, M. (2020). wav2vec 2.0: A framework for self-supervised learning of speech representations. *NeurIPS*.
 - Bredin, H. (2017). pyannote.metrics: A toolkit for reproducible evaluation, diagnostic, and error analysis of speaker diarization systems. *Interspeech*.
+- Hannun, A. Y., Maas, A. L., Jurafsky, D. & Ng, A. Y. (2014). First-pass large vocabulary continuous speech recognition using bi-directional recurrent DNNs. *arXiv:1408.2873*.
+- Heafield, K. (2011). KenLM: Faster and smaller language model queries. *Workshop on Statistical Machine Translation*.
+- Jelinek, F. (1997). *Statistical Methods for Speech Recognition*. MIT Press.
 - Bredin, H. (2023). pyannote.audio 2.1 speaker diarization pipeline: principle, benchmark, and recipe. *Interspeech*.
 - Carletta, J. et al. (2005). The AMI meeting corpus: A pre-announcement. *MLMI*, LNCS 3869.
 - Davis, S. & Mermelstein, P. (1980). Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences. *IEEE Trans. ASSP*, 28(4), 357–366.
@@ -336,11 +421,14 @@ la reconnaissance dépend de l'ordinateur ; elle est à mesurer sur l'essai cour
 - Kuhn, H. W. (1955). The Hungarian method for the assignment problem. *Naval Research Logistics Quarterly*, 2, 83–97.
 - Morris, A. C., Maier, V. & Green, P. (2004). From WER and RIL to MER and WIL: Improved evaluation measures for connected speech recognition. *Interspeech*.
 - Park, T. J., Han, K. J., Kumar, M. & Narayanan, S. (2020). Auto-tuning spectral clustering for speaker diarization using normalized maximum eigengap. *IEEE Signal Processing Letters*, 27, 381–385.
+- Peddinti, V., Manohar, V., Wang, Y., Povey, D. & Khudanpur, S. (2016). Far-field ASR without parallel data. *Interspeech*.
 - Plaquet, A. & Bredin, H. (2023). Powerset multi-class cross entropy loss for neural speaker diarization. *Interspeech*.
 - Povey, D. et al. (2011). The Kaldi speech recognition toolkit. *IEEE ASRU Workshop*.
 - Rousseeuw, P. J. (1987). Silhouettes: A graphical aid to the interpretation and validation of cluster analysis. *Journal of Computational and Applied Mathematics*, 20, 53–65.
 - Sell, G. et al. (2018). Diarization is hard: Some experiences and lessons learned for the JHU team in the inaugural DIHARD challenge. *Interspeech*.
 - Snyder, D., Garcia-Romero, D., Sell, G., Povey, D. & Khudanpur, S. (2018). X-vectors: Robust DNN embeddings for speaker recognition. *ICASSP*.
+- Straka, M. & Straková, J. (2017). Tokenizing, POS tagging, lemmatizing and parsing UD 2.0 with UDPipe. *CoNLL 2017 Shared Task*.
+- Wijffels, J. (2023). *udpipe: Tokenization, Parts of Speech Tagging, Lemmatization and Dependency Parsing with the UDPipe NLP Toolkit*. Paquet R.
 - Wang, H. et al. (2023). WeSpeaker: A research and production oriented speaker embedding learning toolkit. *ICASSP*.
 - von Luxburg, U. (2007). A tutorial on spectral clustering. *Statistics and Computing*, 17, 395–416.
 - Règlement (UE) 2016/679 (RGPD), art. 4(5), 4(14), 9 et considérant 26.

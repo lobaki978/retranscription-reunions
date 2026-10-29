@@ -26,6 +26,22 @@ def modele_reconnaissance(p: Parametres) -> str:
     return p.modele_w2v_leger if p.petit_modele else p.modele_w2v
 
 
+def decodage(p: Parametres) -> str:
+    """Description du décodage, pour savoir si une reconnaissance déjà faite est réutilisable."""
+    if p.moteur == "vosk":
+        return "vosk"
+    if not (p.utiliser_modele_langue and Path(p.modele_langue).exists()):
+        return "glouton"
+    from . import langue
+    if langue.disponible():
+        return "glouton"
+    lex = ""
+    if p.lexique and Path(p.lexique).exists():
+        import hashlib
+        lex = "+lexique:" + hashlib.sha1(Path(p.lexique).read_bytes()).hexdigest()[:10]
+    return f"faisceau:{Path(p.modele_langue).name}:{p.largeur_faisceau}{lex}"
+
+
 def _chemins(racine: Path, session: str) -> Dict[str, Path]:
     d = Path(racine) / session
     return {"session": d, "travail": d / "_travail", "validation": d / "validation",
@@ -80,8 +96,10 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
     cache = c["travail"] / "mots_asr.json"
     taille = c["audio"].stat().st_size
     nom_modele = modele_reconnaissance(p)
+    mode = decodage(p) if transcripteur is None else "injecte"
     if (p.reprendre and cache.exists() and lire_json(cache).get("taille_audio") == taille
-            and lire_json(cache).get("modele") == Path(nom_modele).name):
+            and lire_json(cache).get("modele") == Path(nom_modele).name
+            and lire_json(cache).get("decodage", "glouton") == mode):
         mots = [Mot(**m) for m in lire_json(cache)["mots"]]
         log.info("Reconnaissance existante réutilisée (%d mots).", len(mots))
     else:
@@ -93,10 +111,20 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
             del modele                      # libère la mémoire du grand modèle
         else:
             from .asr_w2v import TranscripteurW2V
-            moteur = TranscripteurW2V(nom_modele)
+            lm = p.modele_langue if p.utiliser_modele_langue else None
+            if lm and not Path(lm).exists():
+                log.warning("Modèle de langue absent (%s) : décodage sans modèle de langue. "
+                            "Relancez le téléchargement des modèles.", lm)
+                lm = None
+            if p.lexique and not Path(p.lexique).exists():
+                log.warning("Lexique introuvable : %s (ignoré).", p.lexique)
+            moteur = TranscripteurW2V(nom_modele, dossier_lm=lm,
+                                      lexique=p.lexique if p.lexique and Path(p.lexique).exists() else None,
+                                      largeur=p.largeur_faisceau)
             mots = moteur.transcrire_wav(c["audio"])
+            mode = "glouton" if moteur.lm is None else mode
             del moteur
-        ecrire_json(cache, {"taille_audio": taille, "modele": Path(nom_modele).name,
+        ecrire_json(cache, {"taille_audio": taille, "modele": Path(nom_modele).name, "decodage": mode,
                             "mots": [m.to_dict() for m in mots]})
     if not mots:
         raise RuntimeError("Aucun mot reconnu : vérifiez le son et le modèle.")
@@ -106,11 +134,19 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
     neurale = (p.diarisation == "neurale" and extracteur is None
                and Path(p.modele_segmentation).exists() and Path(p.modele_wespeaker).exists())
     if neurale:
-        from .segmentation import ExtracteurWeSpeaker, Segmenteur, attribuer_mots_tours, diariser
+        from .segmentation import (ExtracteurWeSpeaker, Segmenteur, attribuer_mots_tours,
+                                   empreintes_locales, regrouper)
         log.info("Diarisation : segmentation pyannote 3.0 + empreintes WeSpeaker…")
         extracteur = ExtracteurWeSpeaker(p.modele_wespeaker)
-        resd = diariser(signal, duree, Segmenteur(p.modele_segmentation), extracteur,
-                        k=p.nb_locuteurs, k_max=p.nb_max, seuil_distance=p.seuil_voix)
+        loc = empreintes_locales(signal, duree, Segmenteur(p.modele_segmentation), extracteur)
+        profils = None
+        if p.poids_canaux > 0 and len(pistes) > 1:
+            log.info("Position des micros prise en compte (poids %.2f).", p.poids_canaux)
+            profils = np.vstack([_profil_zones(micros, z) for z in loc.zones])
+        resd = regrouper(loc, k=p.nb_locuteurs, k_max=p.nb_max, seuil_distance=p.seuil_voix,
+                         regroupement=p.regroupement, taille_min_voix=p.taille_min_voix,
+                         profils=profils, poids_canaux=p.poids_canaux)
+        del loc
         attrib = attribuer_mots_tours(mots, resd, portee_s=float("inf"))
         k_voix, centres_bruts, durees = resd.k, resd.centres_bruts, resd.durees
         silhouette, silhouettes_k, n_fen = resd.silhouette, resd.silhouettes_k, resd.n_empreintes
@@ -182,6 +218,7 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
         "methode_empreinte": nom_empreinte, "fenetres": int(n_fen),
         "methode_diarisation": "segmentation pyannote 3.0 + WeSpeaker" if neurale else "fenêtres glissantes",
         "moteur": p.moteur, "modele_reconnaissance": Path(nom_modele).name, "seuil_marge": seuil_marge,
+        "decodage": mode,
         "k": k_voix, "k_impose": bool(p.nb_locuteurs), "silhouette": round(silhouette, 4),
         "silhouettes_k": silhouettes_k, "micros": micros.resume(),
         "decisions": decisions, "parametres": p.to_dict(),
@@ -204,6 +241,14 @@ def transcrire_session(dossier_media: Path, session: str, date: Optional[str],
         if (c["travail"] / "pistes").exists():
             log.warning("Pistes temporaires non effacées : supprimez %s à la main.", c["travail"] / "pistes")
     log.info("Session %s terminée. Résultats : %s", session, c["session"])
+
+
+def _profil_zones(micros: Micros, zones) -> np.ndarray:
+    """RSB moyen de chaque micro sur les intervalles de parole d'une empreinte (pondéré par la durée)."""
+    total = sum(b - a for a, b in zones)
+    if total <= 0:
+        return micros.profil(zones[0][0], zones[0][1])
+    return np.sum([micros.profil(a, b) * (b - a) for a, b in zones], axis=0) / total
 
 
 def lire_correspondances(chemin: Path) -> Dict[int, str]:
@@ -235,6 +280,10 @@ def produire(racine: Path, session: str, p: Parametres, nouveaux_extraits: bool 
     p_ind = Parametres(**{**p.to_dict(), "seuil_marge": infos.get("seuil_marge", p.seuil_marge)})
     sorties.signaler(segments, p_ind, a_verifier)
     methode = "Vosk/Kaldi" if infos.get("moteur", "vosk") == "vosk" else "wav2vec 2.0 + CTC"
+    if str(infos.get("decodage", "")).startswith("faisceau"):
+        methode += " + modèle de langue 5-grammes"
+        if "+lexique" in infos["decodage"]:
+            methode += " + lexique du projet"
     sorties.ecrire_transcription(segments, session, infos["date"], c["session"], methode)
     sorties.ecrire_locuteurs(segments, session, infos["date"], c["session"], Path(racine), decisions)
     sorties.ecrire_eaf_session(segments, c["session"] / f"{session}_transcription.eaf",

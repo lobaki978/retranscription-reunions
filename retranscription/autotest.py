@@ -84,6 +84,25 @@ def _signal(chemin: Path) -> np.ndarray:
     return np.fromfile(piste.chemin, dtype="<i2")
 
 
+def _verifier_multicanal(note, tmp: Path) -> None:
+    """Fichier WAV à 10 canaux (enregistreur multipiste) : chaque canal devient une piste."""
+    try:
+        import wave
+        from .audio import extraire_pistes
+        n_c, n = 10, 48000 * 3
+        rng = np.random.default_rng(3)
+        x = (rng.standard_normal((n, n_c)) * 3000).astype("<i2")
+        chemin = tmp / "multipiste.WAV"
+        with wave.open(str(chemin), "wb") as w:
+            w.setnchannels(n_c); w.setsampwidth(2); w.setframerate(48000)
+            w.writeframes(x.tobytes())
+        pistes = extraire_pistes([chemin], tmp / "_multi")
+        ok = len(pistes) == n_c and all(abs(p.n - 3 * TAUX) < TAUX // 10 for p in pistes)
+        note("fichier à 10 canaux", ok, f"{len(pistes)} pistes")
+    except Exception:
+        note("fichier à 10 canaux", False, traceback.format_exc())
+
+
 def _verifier_w2v(note, chemin: Path) -> None:
     """Décodage CTC avec le réseau miniature : comparé à un décodage de référence."""
     try:
@@ -105,6 +124,69 @@ def _verifier_w2v(note, chemin: Path) -> None:
              f"{len(ids)} trames (attendu {attendu}), accord par blocs {100 * accord:.0f} %, {len(mots)} mots")
     except Exception:
         note("wav2vec 2.0 (réseau miniature)", False, traceback.format_exc())
+
+
+ARPA_TEST = """\\data\\
+ngram 1=6
+ngram 2=3
+
+\\1-grams:
+-1.0\t<s>\t-0.3
+-1.0\t</s>
+-3.0\t<unk>
+-1.2\tla\t-0.3
+-1.4\tmaison\t-0.3
+-1.2\tbelle\t-0.3
+
+\\2-grams:
+-0.3\t<s> la
+-0.2\tla maison
+-0.2\tmaison belle
+
+\\end\\
+"""
+
+
+def _verifier_langue(note) -> None:
+    """Décodage par faisceau avec un petit modèle de langue : « la maisun » doit devenir « la maison ».
+
+    Non bloquant : sans KenLM, l'application fonctionne avec le décodage glouton.
+    """
+    from . import langue
+    raison = langue.disponible()
+    if raison:
+        note("modèle de langue (KenLM, pyctcdecode)", False, f"absent ({raison}) : décodage glouton seulement",
+             bloquant=False)
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="retranscription_lm_"))
+    try:
+        (tmp / "test.arpa").write_text(ARPA_TEST, encoding="utf-8")
+        vocab = {0: "<pad>", 1: "|", 2: "<unk>"}
+        for c in "abcdefghijklmnopqrstuvwxyz":
+            vocab[len(vocab)] = c
+        idx = {t: i for i, t in vocab.items()}
+        P = []
+        for ch in "la maison":
+            car = "|" if ch == " " else ch
+            p = np.full(len(vocab), 1e-4)
+            if ch == "o":
+                p[idx["u"]], p[idx["o"]] = 0.55, 0.40
+            else:
+                p[idx[car]] = 0.95
+            P += [p / p.sum(), p / p.sum()]
+            b = np.full(len(vocab), 1e-4)
+            b[0] = 0.95
+            P.append(b / b.sum())
+        P = np.array(P)
+        dec = langue.DecodeurLM(tmp, vocab, 0, "|", len(vocab), largeur=16)
+        mots = dec.decoder(np.log(P).astype(np.float16), P.argmax(axis=1), P.max(axis=1), 0.02)
+        texte = " ".join(m.mot for m in mots)
+        note("modèle de langue (KenLM, pyctcdecode)", texte == "la maison", f"« la maisun » -> « {texte} »",
+             bloquant=False)
+    except Exception:
+        note("modèle de langue (KenLM, pyctcdecode)", False, traceback.format_exc(), bloquant=False)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _verifier_neurale(note, chemin: Path, verite) -> None:
@@ -132,10 +214,11 @@ def _verifier_neurale(note, chemin: Path, verite) -> None:
 def verifier(chemin_rapport=None) -> int:
     lignes, ok = [], True
 
-    def note(etape, reussi, detail=""):
+    def note(etape, reussi, detail="", bloquant=True):
         nonlocal ok
-        ok = ok and reussi
-        lignes.append(f"{'OK ' if reussi else 'ÉCHEC'}  {etape}{' : ' + detail if detail else ''}")
+        ok = ok and (reussi or not bloquant)
+        etat = "OK " if reussi else ("ÉCHEC" if bloquant else "ATTENTION")
+        lignes.append(f"{etat}  {etape}{' : ' + detail if detail else ''}")
 
     try:
         import vosk
@@ -188,7 +271,9 @@ def verifier(chemin_rapport=None) -> int:
         note("attribution des voix", exact > 0.8, f"{100 * exact:.0f} % des mots")
         note("fichier ELAN", (tmp / "resultats" / "TEST" / "TEST_transcription.eaf").exists())
         note("évaluation", evaluer(tmp / "resultats", "TEST") == {}, "extraits non corrigés détectés")
+        _verifier_multicanal(note, tmp)
         _verifier_w2v(note, chemin)
+        _verifier_langue(note)
         _verifier_neurale(note, chemin, verite)
     except Exception:
         note("chaîne complète", False, traceback.format_exc())

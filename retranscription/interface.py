@@ -25,7 +25,7 @@ FICHIER_REGLAGES = dossier_donnees_utilisateur() / "reglages.json"
 DOCUMENTS = Path.home() / "Documents"
 MOTEURS = {"wav2vec 2.0 (recommandé, plus précis)": "wav2vec2",
            "Vosk (plus rapide, moins précis)": "vosk"}
-TAILLES = {"wav2vec2-fr": 1200, "wav2vec2-fr-int8": 400, "segmentation-3.0.onnx": 6,
+TAILLES = {"wav2vec2-fr": 1200, "wav2vec2-fr-int8": 400, "lm-fr-5gram": 1000, "segmentation-3.0.onnx": 6,
            "wespeaker-resnet34.onnx": 26, "vosk-model-fr-0.22": 1400, "vosk-model-small-fr-0.22": 40,
            "vosk-model-spk-0.4": 13}
 
@@ -112,7 +112,7 @@ class Application:
         self.tk, self.ttk = tk, ttk
         self.racine = tk.Tk()
         self.racine.title(f"Retranscription de réunions — version {__version__}")
-        self.racine.geometry("900x740")
+        self.racine.geometry("900x820")
         self.racine.minsize(760, 600)
         self.file = queue.Queue()
         self.occupe = False
@@ -131,6 +131,14 @@ class Application:
         log.propagate = False
 
         self._construire()
+        # hauteur : tout le contenu, sans dépasser l'écran (polices plus grandes sur Mac)
+        self.racine.update_idletasks()
+        ecran = self.racine.winfo_screenheight() - 80
+        if self.racine.winfo_reqheight() + 10 > ecran:          # petit écran : journal réduit
+            self.journal.configure(height=2)
+            self.racine.update_idletasks()
+        haut = min(max(self.racine.winfo_reqheight() + 10, 740), ecran)
+        self.racine.geometry(f"900x{haut}")
         self.racine.protocol("WM_DELETE_WINDOW", self._fermer)
         self.racine.after(200, self._lire_file)
         self.racine.after(300, self._etat_modeles)
@@ -172,7 +180,7 @@ class Application:
             lignes[page] += 1
 
         def aide(page, texte, colonne=1):
-            ttk.Label(page, text=texte, style="Aide.TLabel", wraplength=600, justify="left").grid(
+            ttk.Label(page, text=texte, style="Aide.TLabel", wraplength=720, justify="left").grid(
                 row=lignes[page], column=colonne, columnspan=3 - colonne, sticky="w", pady=(0, 3))
             lignes[page] += 1
 
@@ -196,8 +204,7 @@ class Application:
         ttk.Button(choix, text="Dossier…", command=self._choisir_videos).pack(side="left")
         ttk.Button(choix, text="Vidéo…", command=self._choisir_video).pack(side="left", padx=(4, 0))
         ligne(page1, "Dossier des vidéos", champ_videos, choix,
-              "Un dossier par session, avec toutes ses vidéos (ou fichiers son). « Dossier… » n'affiche "
-              "que les dossiers : c'est normal. « Vidéo… » permet de choisir directement une vidéo.")
+              "Un dossier par session (vidéos ou fichiers son). « Vidéo… » : choisir directement une vidéo.")
         self.v_reference = tk.StringVar()
         self.c_reference = ttk.Combobox(page1, textvariable=self.v_reference, state="readonly")
         ligne(page1, "Vidéo de référence", self.c_reference, None,
@@ -212,8 +219,7 @@ class Application:
         ttk.Label(petits, text="   Personnes qui parlent").pack(side="left")
         ttk.Spinbox(petits, from_=0, to=60, textvariable=self.v_nb, width=5).pack(side="left", padx=(6, 0))
         ligne(page1, "Nom de la session", petits, None,
-              "Nom court sans espace (ex. S01). Personnes : participants et animateurs ; "
-              "0 = je ne sais pas (estimation automatique, moins fiable).")
+              "Nom court sans espace (ex. S01). Personnes : participants et animateurs ; 0 = je ne sais pas.")
         self.v_moteur = tk.StringVar(value=next((k for k, v in MOTEURS.items()
                                                  if v == self.reglages.get("moteur", "wav2vec2")),
                                                 list(MOTEURS)[0]))
@@ -223,6 +229,10 @@ class Application:
         self.v_petit = tk.BooleanVar(value=bool(self.reglages.get("petit_modele")))
         ttk.Checkbutton(page1, text="Ordinateur peu puissant (moins de 8 Go de mémoire) : modèle allégé, un peu moins précis",
                         variable=self.v_petit).grid(row=lignes[page1], column=1, columnspan=2, sticky="w", pady=3)
+        lignes[page1] += 1
+        self.v_micros = tk.BooleanVar(value=bool(self.reglages.get("micros_proches")))
+        ttk.Checkbutton(page1, text="Un micro près de chaque participant : s'en servir aussi pour distinguer les voix",
+                        variable=self.v_micros).grid(row=lignes[page1], column=1, columnspan=2, sticky="w", pady=3)
         lignes[page1] += 1
         self.v_essai = tk.BooleanVar(value=False)
         ttk.Checkbutton(page1, text="Essai : seulement les 10 premières minutes (pour vérifier que tout fonctionne)",
@@ -236,7 +246,11 @@ class Application:
         self.v_registre = tk.StringVar(value=self.reglages["registre"])
         ligne(page1, "Empreintes vocales", ttk.Entry(page1, textvariable=self.v_registre),
               ttk.Button(page1, text="Choisir…", command=lambda: self._choisir(self.v_registre)),
-              "Données biométriques : à ne pas partager. Gardez le même dossier pour toutes les sessions d'un projet.")
+              "Données biométriques : à ne pas partager. Même dossier pour toutes les sessions d'un projet.")
+        self.v_lexique = tk.StringVar(value=self.reglages.get("lexique", ""))
+        ligne(page1, "Lexique du projet", ttk.Entry(page1, textvariable=self.v_lexique),
+              ttk.Button(page1, text="Choisir…", command=self._choisir_lexique),
+              "Facultatif. Un terme par ligne (lieux, sigles, mots du domaine) : ils sont mieux reconnus.")
         self.b_transcrire = ttk.Button(page1, text="Transcrire", style="Grand.TButton", command=self._transcrire)
         self.b_transcrire.grid(row=lignes[page1], column=1, sticky="w", pady=(10, 2))
         lignes[page1] += 1
@@ -306,6 +320,14 @@ class Application:
         self.journal.insert("end", texte + "\n")
         self.journal.see("end")
         self.journal.configure(state="disabled")
+
+    def _choisir_lexique(self):
+        from tkinter import filedialog
+        f = filedialog.askopenfilename(initialdir=str(Path(self.v_lexique.get()).parent) if self.v_lexique.get()
+                                       else str(Path.home()),
+                                       filetypes=[("Texte", "*.txt"), ("Tous les fichiers", "*")])
+        if f:
+            self.v_lexique.set(f)
 
     def _choisir(self, variable):
         from tkinter import filedialog
@@ -400,6 +422,8 @@ class Application:
                               "videos": self.v_videos.get(), "seuil": self._seuil(),
                               "petit_modele": bool(self.v_petit.get()),
                               "moteur": MOTEURS.get(self.v_moteur.get(), "wav2vec2"),
+                              "lexique": self.v_lexique.get().strip().strip('"'),
+                              "micros_proches": bool(self.v_micros.get()),
                               "version": __version__})
         ecrire_reglages(self.reglages)
 
@@ -510,8 +534,13 @@ class Application:
                 f"{sum(TAILLES.get(m, 0) for m in manq)} Mo). Les télécharger maintenant ?"):
             return
         self._sauver_reglages()
+        lexique = self.v_lexique.get().strip().strip('"')
+        if lexique and not Path(lexique).is_file():
+            messagebox.showerror("Retranscription", f"Lexique introuvable :\n{lexique}")
+            return
         p = Parametres(nb_locuteurs=nb or None, reference=self.v_reference.get() or None,
                        seuil_appariement=self._seuil(), moteur=self._moteur(), petit_modele=petit,
+                       lexique=lexique or None, poids_canaux=0.3 if self.v_micros.get() else 0.0,
                        duree_max_s=600.0 if self.v_essai.get() else None)
         date_s = self.v_date.get().strip()
         registre = Path(self.v_registre.get())

@@ -129,9 +129,26 @@ def _couper(Z, arbre, micro_lab, k, taille_min, iterations=0):
     return lab
 
 
+def _rattacher_petits(Z: np.ndarray, lab: np.ndarray, taille_min: int) -> np.ndarray:
+    """Les groupes de moins de taille_min empreintes rejoignent le groupe substantiel le
+    plus proche (cosinus entre centres), comme dans pyannote.audio 3.1."""
+    u, c = np.unique(lab, return_counts=True)
+    grands, petits = u[c >= taille_min], u[c < taille_min]
+    if len(grands) == 0 or len(petits) == 0:
+        return lab
+    cg = normer(np.vstack([Z[lab == g].mean(axis=0) for g in grands]))
+    cp = normer(np.vstack([Z[lab == g].mean(axis=0) for g in petits]))
+    proche = np.argmax(cp @ cg.T, axis=1)
+    lab = lab.copy()
+    for p, j in zip(petits, proche):
+        lab[lab == p] = grands[j]
+    return lab
+
+
 def classer(Z: np.ndarray, k: Optional[int] = None, k_max: int = 20,
             graine: int = 0, taille_min: Optional[int] = None,
-            affiner: bool = False, seuil_distance: Optional[float] = None) -> ResultatClassification:
+            affiner: bool = False, seuil_distance: Optional[float] = None,
+            taille_min_seuil: Optional[int] = None) -> ResultatClassification:
     rng = np.random.default_rng(graine)
     n = len(Z)
     if n < 2:
@@ -157,6 +174,8 @@ def classer(Z: np.ndarray, k: Optional[int] = None, k_max: int = 20,
         lab = _couper(Z, arbre, micro_lab, int(min(k, len(C))), taille_min, 20 if affiner else 0)
     elif seuil_distance:
         lab = fcluster(arbre, seuil_distance, criterion="distance")[micro_lab] - 1
+        if taille_min_seuil and taille_min_seuil > 1:
+            lab = _rattacher_petits(Z, lab, taille_min_seuil)
         log.info("Nombre de voix estimé par seuil de distance (%.2f) : %d", seuil_distance, len(set(lab)))
     else:
         k_eff = nombre_par_ecart_propre(C, k_max=int(min(k_max, len(C) - 1)))
@@ -175,6 +194,86 @@ def classer(Z: np.ndarray, k: Optional[int] = None, k_max: int = 20,
     S = Z @ centres.T
     sil = _silhouette(Z, lab, rng)
     return ResultatClassification(lab, centres, S, k_eff, sil, sil_k)
+
+
+# Réglages du regroupement de pyannote.audio 3.1 (pipeline speaker-diarization-3.1)
+SEUIL_PYANNOTE31 = 0.7045654963945799
+TAILLE_MIN_PYANNOTE31 = 12
+
+
+def classer_centroide(Z: np.ndarray, k: Optional[int] = None, k_max: int = 20,
+                      seuil: float = SEUIL_PYANNOTE31, taille_min: int = TAILLE_MIN_PYANNOTE31,
+                      graine: int = 0) -> ResultatClassification:
+    """Regroupement de pyannote.audio 3.1 (Bredin, 2023 ; Plaquet & Bredin, 2023).
+
+    1. Empreintes normées ; CAH, lien centroïde, distance euclidienne.
+    2. Coupure de l'arbre au seuil (0,7046).
+    3. Groupes « grands » : au moins taille_min empreintes (12, ou 10 % du
+       nombre d'empreintes si l'enregistrement est court). Les petits groupes
+       sont rattachés au grand groupe dont le centre est le plus proche
+       (distance cosinus) : une voix ne peut pas naître de quelques empreintes
+       floues.
+    4. Nombre de voix fourni (k) : on parcourt l'arbre, en partant du seuil,
+       jusqu'à obtenir k grands groupes (ou le nombre le plus proche).
+    Portage de pyannote.audio.pipelines.clustering.AgglomerativeClustering
+    (licence MIT).
+    """
+    from scipy.spatial.distance import cdist
+    rng = np.random.default_rng(graine)
+    n = len(Z)
+    if n < 2:
+        raise RuntimeError("Trop peu de parole pour distinguer des locuteurs.")
+    Zn = normer(Z)
+    taille_min = int(min(taille_min, max(1, round(0.1 * n))))
+    arbre = linkage(Zn, method="centroid", metric="euclidean")
+    lab = fcluster(arbre, seuil, criterion="distance") - 1
+
+    def grands_de(l):
+        u, c = np.unique(l, return_counts=True)
+        return u, c, u[c >= taille_min]
+
+    uniq, compte, grands = grands_de(lab)
+    cible = k
+    if cible is None and len(grands) > k_max:
+        cible = k_max
+    if cible is not None and len(grands) != cible:
+        arbre_it = arbre.copy()
+        arbre_it[:, 2] = np.arange(n - 1)
+        meilleure, meilleur_n = n - 1, 1
+        for it in np.argsort(np.abs(arbre[:, 2] - seuil)):
+            if arbre_it[it, 3] < taille_min:
+                continue
+            l = fcluster(arbre_it, it, criterion="distance") - 1
+            n_grands = len(grands_de(l)[2])
+            if abs(n_grands - cible) < abs(meilleur_n - cible):
+                meilleure, meilleur_n = it, n_grands
+            if n_grands == cible:
+                break
+        lab = fcluster(arbre_it, meilleure, criterion="distance") - 1
+        uniq, compte, grands = grands_de(lab)
+        if len(grands) != cible:
+            log.info("Seulement %d voix distinctes trouvées (au lieu de %d).", len(grands), cible)
+    if len(grands) == 0:
+        lab[:] = 0
+    else:
+        petits = uniq[compte < taille_min]
+        if len(petits):
+            cg = np.vstack([Zn[lab == g].mean(axis=0) for g in grands])
+            cp = np.vstack([Zn[lab == g].mean(axis=0) for g in petits])
+            plus_proche = np.argmin(cdist(cg, cp, metric="cosine"), axis=0)
+            for i, j in enumerate(plus_proche):
+                lab[lab == petits[i]] = grands[j]
+    if k is None:
+        log.info("Nombre de voix estimé (regroupement pyannote 3.1, seuil %.3f) : %d", seuil, len(np.unique(lab)))
+    # renuméroter par ordre de première apparition
+    ordre, vus = {}, 0
+    for g in lab:
+        if g not in ordre:
+            ordre[g] = vus
+            vus += 1
+    lab = np.array([ordre[g] for g in lab], dtype=int)
+    centres = normer(np.vstack([Zn[lab == g].mean(axis=0) for g in range(vus)]))
+    return ResultatClassification(lab, centres, Zn @ centres.T, vus, _silhouette(Zn, lab, rng), {})
 
 
 def viterbi(S: np.ndarray, debuts: np.ndarray, fins: np.ndarray, temperature: float = 0.05,

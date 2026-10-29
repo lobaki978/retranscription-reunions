@@ -47,7 +47,13 @@ class Segment:
         return float(np.mean(v)) if v else float("nan")
 
 
-def segmenter(mots: List[dict], correspondance: Dict[int, str], pause_max: float = 2.0) -> List[Segment]:
+def segmenter(mots: List[dict], correspondance: Dict[int, str], pause_max: float = 2.0,
+              duree_max: float = 30.0, pause_coupe: float = 0.5) -> List[Segment]:
+    """Segments : mots consécutifs d'un même locuteur sans pause de plus de pause_max.
+
+    Un segment qui dépasse duree_max secondes est coupé à la pause suivante
+    d'au moins pause_coupe secondes (lisibilité, extraits ELAN).
+    """
     segments: List[Segment] = []
     for m in mots:
         g = m.get("groupe", -1)
@@ -55,7 +61,9 @@ def segmenter(mots: List[dict], correspondance: Dict[int, str], pause_max: float
             continue
         spk = correspondance.get(int(g), "Speaker ??")
         dernier = segments[-1] if segments else None
-        if dernier and dernier.speaker == spk and m["debut"] - dernier.fin <= pause_max:
+        pause = m["debut"] - dernier.fin if dernier else 0.0
+        trop_long = dernier is not None and dernier.duree > duree_max and pause >= pause_coupe
+        if dernier and dernier.speaker == spk and pause <= pause_max and not trop_long:
             s = dernier
         else:
             s = Segment(speaker=spk, debut=m["debut"], fin=m["fin"], groupe_local=int(g))
@@ -122,9 +130,20 @@ def ecrire_transcription(segments: List[Segment], session: str, date: str, dossi
     with open(dossier / f"{session}_transcription.txt", "w", encoding="utf-8") as f:
         f.write(f"Session {session} — {date}\n")
         f.write(f"Transcription automatique ({methode}), locuteurs pseudonymisés.\n")
-        f.write("Texte non relu : voir le dossier validation/.\n\n")
-        for s in segments:
-            f.write(f"[{hms(s.debut, ms=False)}] {s.speaker} : {s.texte}\n\n")
+        f.write("Texte non relu : voir le dossier validation/.\n")
+        f.write("Un paragraphe par prise de parole ; nouvelle ligne après une pause de plus de 2 s "
+                "(ou toutes les 30 s environ).\n\n")
+        # le locuteur n'est écrit qu'au changement de locuteur (tour) ; les segments
+        # suivants du même tour sont en retrait, avec leur heure
+        retrait = " " * 11
+        for k, seg in enumerate(segments):
+            nouveau_tour = k == 0 or seg.tour != segments[k - 1].tour
+            if nouveau_tour:
+                if k:
+                    f.write("\n")
+                f.write(f"[{hms(seg.debut, ms=False)}] {seg.speaker} : {seg.texte}\n")
+            else:
+                f.write(f"{retrait}[{hms(seg.debut, ms=False)}] {seg.texte}\n")
 
 
 def ecrire_indicateurs(segments: List[Segment], session: str, dossier: Path) -> None:

@@ -49,6 +49,11 @@ class Parametres:
     modele_w2v: str = str(MODELES / "wav2vec2-fr")               # 32 bits
     modele_w2v_leger: str = str(MODELES / "wav2vec2-fr-int8")    # 8 bits, plus rapide
     petit_modele: bool = False       # ordinateur peu puissant
+    # modèle de langue n-gramme pour le décodage par faisceau (wav2vec 2.0)
+    modele_langue: str = str(MODELES / "lm-fr-5gram")
+    utiliser_modele_langue: bool = True
+    lexique: Optional[str] = None    # fichier texte : termes du projet favorisés (un par ligne)
+    largeur_faisceau: int = 64
     # modèles Vosk (dossiers décompressés)
     modele: str = str(MODELES / "vosk-model-fr-0.22")            # reconnaissance de la parole
     modele_leger: str = str(MODELES / "vosk-model-small-fr-0.22")  # décodage court des fenêtres x-vecteur
@@ -61,11 +66,14 @@ class Parametres:
     empreinte: str = "wespeaker"     # méthode « fenetres » : "wespeaker", "vosk" ou "mfcc"
     seuil_voix: float = 0.75         # distance cosinus de coupure si le nombre de voix est inconnu
     tour_min_s: float = 1.0          # tour de parole minimal (lissage)
+    taille_min_voix: int = 6         # groupe de moins d'empreintes : rattaché à la voix la plus proche
+    regroupement: str = "moyen"      # "moyen" (lien moyen, cosinus) ou "pyannote31" (lien centroïde)
 
     # micros
     reference: Optional[str] = None  # fichier dont le début = temps 0 (défaut : le premier)
     max_decalage_s: float = 1800.0   # écart maximal entre les démarrages des caméras
     poids_canaux: float = 0.0        # part du profil d'énergie des micros dans le regroupement
+    #                                  (0,3 conseillé si un micro est proche de chaque participant)
 
     # locuteurs
     nb_locuteurs: Optional[int] = None   # recommandé : nombre de personnes présentes

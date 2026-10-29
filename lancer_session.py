@@ -32,6 +32,8 @@ REGISTRE = r"C:\Users\VOTRE_NOM\Documents\Deliberation\registre"  # empreintes v
 SEUIL_APPARIEMENT = None        # None = 0,5 (empreintes WeSpeaker) ; à ajuster après la cellule 4
 MOTEUR = "wav2vec2"             # reconnaissance : "wav2vec2" (plus juste) ou "vosk" (plus rapide)
 PETIT_MODELE = False            # True : modèle allégé (ordinateur de moins de 8 Go de mémoire)
+LEXIQUE = None                  # ex. r"C:\...\lexique.txt" : termes du projet, un par ligne (facultatif)
+MICROS_PROCHES = False          # True : un micro près de chaque participant (aide à distinguer les voix)
 ESSAI = False                   # True : ne traiter que les 10 premières minutes (premier essai)
 
 import sys
@@ -39,13 +41,19 @@ if PROJET not in sys.path:
     sys.path.insert(0, PROJET)  # pour que Python trouve le dossier « retranscription »
 
 
-# %% 0. INSTALLATION — une seule fois (quelques minutes, ~1,2 Go de modèles)
+# %% 0. INSTALLATION — une seule fois (quelques minutes, ~2,2 Go de modèles)
 # Exécutez d'abord la cellule RÉGLAGES.
 import subprocess
 from pathlib import Path
 
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-r",
                        str(Path(PROJET) / "requirements.txt")])
+# modèle de langue : pyctcdecode sans ses dépendances (il imposerait numpy < 2) ; KenLM doit
+# être compilé (sous Windows : « Outils de génération Visual Studio » ; sinon, essayez
+# conda install -c conda-forge kenlm). Sans eux, le décodage se fait sans modèle de langue.
+subprocess.call([sys.executable, "-m", "pip", "install", "--no-deps", "pyctcdecode==0.5.0", "pygtrie>=2.1,<3"])
+if subprocess.call([sys.executable, "-m", "pip", "install", "kenlm"]) != 0:
+    print("KenLM n'a pas pu être installé : la transcription se fera sans modèle de langue.")
 
 from retranscription.audio import verifier_ffmpeg
 from retranscription.config import MODELES
@@ -68,6 +76,7 @@ from retranscription.utils import configurer_journal
 configurer_journal()
 parametres = Parametres(nb_locuteurs=NB_LOCUTEURS, reference=REFERENCE,
                         seuil_appariement=SEUIL_APPARIEMENT, moteur=MOTEUR, petit_modele=PETIT_MODELE,
+                        lexique=LEXIQUE, poids_canaux=0.3 if MICROS_PROCHES else 0.0,
                         duree_max_s=600.0 if ESSAI else None)
 transcrire_session(Path(VIDEOS), SESSION, DATE, Path(SORTIES), Path(REGISTRE), parametres)
 print(f"Terminé. Ouvrez {Path(SORTIES) / SESSION / 'validation' / (SESSION + '_synthese.txt')}")

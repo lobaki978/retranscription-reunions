@@ -168,8 +168,13 @@ def test_telechargement_neuronaux(dossier):
         T.CATALOGUE["segmentation-3.0.onnx"] = ("test", [(url + "absent.onnx", "fichier"),   # 404
                                                          (url + "seg.tar.bz2", "tar-seg")])
         noms = T.necessaires("wav2vec2", petit=True)
-        assert noms == ["wav2vec2-fr-int8", "segmentation-3.0.onnx", "wespeaker-resnet34.onnx"], noms
+        assert noms == ["wav2vec2-fr-int8", "lm-fr-5gram", "segmentation-3.0.onnx",
+                        "wespeaker-resnet34.onnx"], noms
+        assert "lm-fr-5gram" not in T.necessaires("wav2vec2", modele_langue=False)
+        # modèle de langue pas encore publié : avertissement, pas d'erreur
+        T.CATALOGUE["lm-fr-5gram"] = ("test", [(url + "lm-absent.zip", "zip")])
         T.telecharger(dossier / "modeles2", noms)
+        assert not (dossier / "modeles2" / "lm-fr-5gram").exists()
         m = dossier / "modeles2"
         assert (m / "wav2vec2-fr-int8" / "model.onnx").stat().st_size == 1000
         assert (m / "wespeaker-resnet34.onnx").read_bytes() == b"w" * 500
@@ -185,7 +190,29 @@ def test_telechargement_neuronaux(dossier):
         T.CATALOGUE.clear()
         T.CATALOGUE.update(ancien)
         srv.shutdown()
-    print("OK : téléchargement des modèles neuronaux (zip, fichier, tar.bz2, source de repli, erreur claire).")
+    print("OK : téléchargement des modèles neuronaux (zip, fichier, tar.bz2, source de repli, erreur claire, "
+          "modèle de langue facultatif).")
+
+
+def test_multicanal(dossier):
+    """Enregistreur multipiste (10 et 12 canaux) : PyAV ne découpe pas en plans au-delà de 8 canaux."""
+    from scipy.signal import resample_poly
+    from retranscription.audio import extraire_pistes
+    for n_c in (10, 12):
+        rng = np.random.default_rng(n_c)
+        x = (rng.standard_normal((48000 * 3, n_c)) * 3000).astype("<i2")
+        chemin = dossier / f"zoom_{n_c}.WAV"
+        with wave.open(str(chemin), "wb") as w:
+            w.setnchannels(n_c); w.setsampwidth(2); w.setframerate(48000)
+            w.writeframes(x.tobytes())
+        pistes = extraire_pistes([chemin], dossier / f"pistes_{n_c}")
+        assert len(pistes) == n_c, len(pistes)
+        for p in pistes:
+            y = np.fromfile(p.chemin, "<i2").astype(float)
+            r = resample_poly(x[:, p.canal].astype(float), 16000, 48000)
+            m = min(len(y), len(r)) - 2000
+            assert np.corrcoef(y[1000:m], r[1000:m])[0, 1] > 0.99, f"canal {p.canal} mal extrait"
+    print("OK : fichiers à 10 et 12 canaux, chaque canal extrait à sa place.")
 
 
 def test_vraie_bibliotheque():
@@ -208,6 +235,7 @@ if __name__ == "__main__":
         test_transcription_et_xvecteurs(d)
         test_telechargement(d)
         test_telechargement_neuronaux(d)
+        test_multicanal(d)
         test_vraie_bibliotheque()
         print("TOUS LES TESTS SONT PASSÉS.")
     finally:

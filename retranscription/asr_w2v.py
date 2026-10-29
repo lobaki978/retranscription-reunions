@@ -15,6 +15,9 @@ français transcrit.
 
 Le son est traité par blocs de 30 s avec 2 s de contexte de chaque côté ;
 seules les trames centrales de chaque bloc sont gardées.
+
+Si un modèle de langue est fourni (module langue), le texte est ensuite
+décodé par faisceau avec ce modèle ; sinon, décodage glouton.
 """
 
 import json
@@ -30,7 +33,7 @@ from .utils import TAUX, hms, log
 
 
 class TranscripteurW2V:
-    def __init__(self, dossier: str, fils: int = 0):
+    def __init__(self, dossier: str, fils: int = 0, dossier_lm=None, lexique=None, largeur: int = 64):
         import onnxruntime as ort
         dossier = Path(dossier)
         cfg = json.loads((dossier / "config_retranscription.json").read_text(encoding="utf-8"))
@@ -49,6 +52,24 @@ class TranscripteurW2V:
         # symboles spéciaux ([UNK], <s>, </s>…) : tout ce qui n'est pas un caractère unique
         self.speciaux = {i for i, t in self.vocab.items() if len(t) != 1 and i != self.vide}
         self.nom = Path(dossier).name
+        forme = self.sess.get_outputs()[0].shape
+        self.n_sorties = forme[-1] if isinstance(forme[-1], int) else max(self.vocab) + 1
+        self.lm = None
+        self.lexique = []
+        if dossier_lm is not None:
+            from . import langue
+            raison = langue.disponible()
+            if raison:
+                log.warning("Modèle de langue indisponible (%s) : décodage sans modèle de langue.", raison)
+            elif not Path(dossier_lm).exists():
+                log.warning("Modèle de langue absent (%s) : décodage sans modèle de langue.", dossier_lm)
+            else:
+                alphabet = {t for t in self.vocab.values() if len(t) == 1 and t != self.sep}
+                if lexique:
+                    self.lexique = langue.lire_lexique(lexique, alphabet)
+                    log.info("Lexique du projet : %d terme(s) favorisé(s).", len(self.lexique))
+                self.lm = langue.DecodeurLM(dossier_lm, self.vocab, self.vide, self.sep, self.n_sorties,
+                                            lexique=self.lexique, largeur=largeur)
 
     # ------------------------------------------------------------------
     def _logits(self, x: np.ndarray) -> np.ndarray:
@@ -57,12 +78,17 @@ class TranscripteurW2V:
             x = (x - x.mean()) / np.sqrt(x.var() + 1e-7)
         return self.sess.run(None, {"input_values": x[None, :]})[0][0]
 
-    def trames(self, signal: np.ndarray, bloc_s: float = 30.0, contexte_s: float = 2.0):
-        """Étiquette la plus probable et sa probabilité, pour chaque trame de 20 ms."""
+    def trames(self, signal: np.ndarray, bloc_s: float = 30.0, contexte_s: float = 2.0,
+               logits: bool = False):
+        """Étiquette la plus probable et sa probabilité, pour chaque trame de 20 ms.
+
+        logits=True : renvoie aussi les log-probabilités de toutes les
+        étiquettes (16 bits), pour le décodage avec modèle de langue.
+        """
         n = len(signal)
         pas = int(bloc_s * TAUX) // self.ept * self.ept
         ctx = int(contexte_s * TAUX) // self.ept * self.ept
-        ids, probs = [], []
+        ids, probs, lps = [], [], []
         t0 = time.time()
         jalon = 0.05
         for debut in range(0, n, pas):
@@ -79,13 +105,18 @@ class TranscripteurW2V:
             p /= p.sum(axis=1, keepdims=True)
             ids.append(bloc.argmax(axis=1).astype(np.int32))
             probs.append(p.max(axis=1).astype(np.float32))
+            if logits:
+                lps.append(np.maximum(np.log(p + 1e-30), -60.0).astype(np.float16))
             if (debut + pas) / n >= jalon:
                 log.info("  wav2vec 2.0 : %3.0f %% (%s traités, %.0f min écoulées)",
                          100 * min(1, (debut + pas) / n), hms(min(debut + pas, n) / TAUX, ms=False),
                          (time.time() - t0) / 60)
                 jalon += 0.05
         if not ids:
-            return np.zeros(0, np.int32), np.zeros(0, np.float32)
+            vides = np.zeros(0, np.int32), np.zeros(0, np.float32)
+            return vides + (np.zeros((0, self.n_sorties), np.float16),) if logits else vides
+        if logits:
+            return np.concatenate(ids), np.concatenate(probs), np.concatenate(lps)
         return np.concatenate(ids), np.concatenate(probs)
 
     def decoder(self, ids: np.ndarray, probs: np.ndarray, pause_enonce: float = 0.5) -> List[Mot]:
@@ -139,7 +170,12 @@ class TranscripteurW2V:
 
     def transcrire_wav(self, chemin_wav: Path) -> List[Mot]:
         signal = wav_memmap(chemin_wav)
-        ids, probs = self.trames(signal)
-        mots = self.decoder(ids, probs)
-        log.info("wav2vec 2.0 : %d mots reconnus.", len(mots))
+        if self.lm is None:
+            ids, probs = self.trames(signal)
+            mots = self.decoder(ids, probs)
+        else:
+            ids, probs, lp = self.trames(signal, logits=True)
+            mots = self.lm.decoder(lp, ids, probs, self.ept / TAUX)
+        log.info("wav2vec 2.0%s : %d mots reconnus.",
+                 " + modèle de langue" if self.lm is not None else "", len(mots))
         return mots

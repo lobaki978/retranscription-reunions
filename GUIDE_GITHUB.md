@@ -45,20 +45,24 @@ puis **Commit changes**.
    rouge (Windows ou Mac), ouvrez l'étape en rouge et copiez son texte.
    Envoyez-le-moi : je corrigerai.
 
-## 3 bis. Préparer les modèles (une seule fois)
+## 3 bis. Préparer les modèles
 
 L'application télécharge ses modèles au premier lancement. Le modèle de
-reconnaissance wav2vec 2.0 doit d'abord être converti et publié sur votre
-dépôt. GitHub le fait pour vous :
+reconnaissance wav2vec 2.0 doit d'abord être converti, et le modèle de
+langue récupéré, puis publiés sur votre dépôt. GitHub le fait pour vous.
+À relancer quand une nouvelle version ajoute un modèle (la 0.4 ajoute le
+modèle de langue) : seuls les fichiers manquants sont préparés.
 
 1. Onglet **Actions**. Dans la colonne de gauche, cliquez sur
    **Préparer les modèles**.
 2. À droite, cliquez sur **Run workflow**, puis sur le bouton vert
    **Run workflow** (ne changez pas le nom du modèle).
-3. Attendez la coche verte (20 à 40 minutes).
+3. Attendez la coche verte : 20 à 40 minutes la première fois, environ
+   10 minutes pour ajouter seulement le modèle de langue.
 4. Vérifiez : page d'accueil du dépôt > **Releases**. La page
    **Modèles (ne pas supprimer)** contient notamment `wav2vec2-fr.zip`
-   (environ 1,2 Go) et `segmentation-3.0.onnx`.
+   (environ 1,2 Go), `lm-fr-5gram.zip` (environ 1 Go) et
+   `segmentation-3.0.onnx`.
 
 Ne supprimez jamais cette page : les applications y téléchargent leurs
 modèles. Il n'est pas nécessaire de recommencer à chaque nouvelle version.
@@ -75,9 +79,9 @@ Décompressez une fois.
 ### Pour partager (recommandé)
 
 1. Sur la page d'accueil du dépôt, à droite, cliquez sur **Releases**, puis
-   **Create a new release**.
-2. **Choose a tag** : tapez `v0.3.0`, puis **Create new tag**.
-3. **Release title** : `Retranscription 0.3.0`. Cliquez sur **Publish release**.
+   **Draft a new release**.
+2. **Choose a tag** : tapez `v0.4.0`, puis **Create new tag**.
+3. **Release title** : `Retranscription 0.4.0`. Cliquez sur **Publish release**.
 4. La fabrication se relance (15 à 25 minutes). Les deux fichiers
    `Retranscription-Windows.zip` et `Retranscription-Mac.zip` apparaissent
    ensuite sur la page de la version, rubrique **Assets**.
@@ -91,10 +95,13 @@ chaque .zip.
 
 ## 5. Mettre à jour plus tard
 
-1. **Add file** > **Upload files** : glissez les fichiers modifiés (ils
-   remplacent les anciens), puis **Commit changes**.
+1. Bouton **+** (ou **Add file**) > **Upload files** : ouvrez le dossier
+   décompressé, sélectionnez tout son contenu et glissez-le (les fichiers
+   remplacent les anciens), puis **Commit changes**. Le navigateur ignore
+   le dossier `.github` : si les fichiers de `.github/workflows` ont changé,
+   ouvrez ce dossier sur GitHub et déposez-y les fichiers `.yml` eux-mêmes.
 2. Créez une nouvelle version comme au point 4, avec le numéro suivant
-   (`v0.3.1`, `v0.4.0`…).
+   (`v0.4.1`, `v0.5.0`…).
 
 ---
 

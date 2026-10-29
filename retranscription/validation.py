@@ -336,6 +336,7 @@ def ecrire_synthese(dossier_val: Path, session: str, infos: dict, segments: List
         "part_mots_conf_inf_0.5": round(sum(c < 0.5 for c in confs) / len(confs), 4) if confs else None,
         "moteur": infos.get("moteur", "vosk"),
         "modele_reconnaissance": infos.get("modele_reconnaissance", ""),
+        "decodage": infos.get("decodage", "glouton"),
         "methode_diarisation": infos.get("methode_diarisation", "fenêtres glissantes"),
         "methode_empreinte": infos["methode_empreinte"],
         "fenetres": infos["fenetres"],
@@ -358,7 +359,8 @@ def ecrire_synthese(dossier_val: Path, session: str, infos: dict, segments: List
         L.append(f"Mots reconnus : {len(mots)} ; confiance moyenne {synth['confiance_moyenne']:.2f} ; "
                  f"{100 * synth['part_mots_conf_inf_0.5']:.1f} % des mots sous 0,5")
     neurale = synth["methode_diarisation"].startswith("segmentation")
-    L.append(f"Reconnaissance de la parole : {synth['moteur']} ({synth['modele_reconnaissance']})")
+    L.append(f"Reconnaissance de la parole : {synth['moteur']} ({synth['modele_reconnaissance']}) ; "
+             f"décodage : {synth['decodage']}")
     L.append(f"Diarisation : {synth['methode_diarisation']}")
     L.append(f"Empreintes : {synth['methode_empreinte']} sur {synth['fenetres']} "
              + ("locuteurs locaux (fenêtres de 10 s)" if neurale else "fenêtres"))

@@ -50,8 +50,11 @@ xattr -dr com.apple.quarantine /Applications/Retranscription.app
 - **Ordinateur** : au moins 8 Go de mémoire vive. Sinon, cochez « Ordinateur
   peu puissant » (modèle allégé, un peu moins précis).
 - **Internet** : nécessaire une seule fois, au premier lancement, pour
-  télécharger les modèles de reconnaissance (environ 1,2 Go ; 400 Mo avec
-  « Ordinateur peu puissant »).
+  télécharger les modèles (environ 2,2 Go, dont 1 Go pour le modèle de
+  langue qui corrige l'orthographe ; 1,4 Go avec « Ordinateur peu puissant »).
+- **Micros** : plus le micro est proche des personnes, meilleur est le
+  résultat. Un enregistreur multipiste (un micro par participant ou par
+  petit groupe) donne de bien meilleurs résultats que les micros des caméras.
 - **Une session = un dossier** : mettez toutes les vidéos d'une même réunion
   dans un dossier. Plusieurs caméras ou micros : mettez tout ensemble,
   l'application les synchronise. Les vidéos ne sont jamais modifiées.
@@ -73,9 +76,15 @@ xattr -dr com.apple.quarantine /Applications/Retranscription.app
    exact si vous le connaissez : c'est le réglage qui améliore le plus le résultat.
 6. **Reconnaissance** : gardez « wav2vec 2.0 » (le plus juste). « Vosk » est
    plus rapide mais fait plus d'erreurs.
+   **Un micro près de chaque participant** : cochez si c'est le cas
+   (enregistreur multipiste) ; la position des micros aide alors à
+   distinguer les voix.
 7. **Dossiers de travail** : vérifiez où seront rangés les résultats. Évitez
    OneDrive ou Dropbox (gros fichiers son).
-8. Cliquez sur **Transcrire**.
+8. **Lexique du projet** (facultatif) : un fichier texte avec un terme par
+   ligne (noms de lieux, sigles, mots du domaine). Ces termes sont mieux
+   reconnus. Quelques centaines au plus.
+9. Cliquez sur **Transcrire**.
 
 Durée : une à trois heures pour une réunion de 6 h, selon l'ordinateur. Laissez l'ordinateur
 branché et la fenêtre ouverte ; l'application empêche la mise en veille. Le
@@ -99,10 +108,11 @@ Dans le dossier des résultats, un dossier par session :
 | `S01_locuteurs.csv` | Une ligne par personne : temps de parole, nombre de tours… La colonne « sexe » est à remplir à la main |
 | `validation/` | Les contrôles de qualité (voir ci-dessous) |
 
-Le texte est **brut** : sans ponctuation ni majuscules, et non relu. La
-reconnaissance écrit les mots lettre par lettre, comme elle les entend : un
-mot mal compris peut être mal orthographié, et les noms propres sont écrits
-comme ils se prononcent.
+Le texte est **brut** : sans ponctuation ni majuscules, et non relu. Un
+paragraphe correspond à une prise de parole ; une nouvelle ligne en retrait
+signale une pause de plus de 2 s du même locuteur. Un mot mal entendu peut
+être remplacé par un autre mot, plausible mais faux : relisez les passages
+importants en écoutant l'enregistrement.
 
 ---
 

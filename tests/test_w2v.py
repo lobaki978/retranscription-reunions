@@ -36,7 +36,7 @@ def transcripteur_nu(vocab=VOCAB, vide=0):
     """TranscripteurW2V sans réseau (pour tester le décodage seul)."""
     t = object.__new__(TranscripteurW2V)
     t.vocab, t.vide, t.sep, t.normaliser, t.ept = vocab, vide, "|", True, 320
-    t.speciaux = {i for i, s in vocab.items() if s.startswith("<") and s.endswith(">") and i != vide}
+    t.speciaux = {i for i, s in vocab.items() if len(s) != 1 and i != vide}
     t.nom = "test"
     return t
 

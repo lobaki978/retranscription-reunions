@@ -28,7 +28,7 @@ from typing import List, Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from .diarisation import classer, normer
+from .diarisation import classer, classer_centroide, normer
 from .utils import TAUX, log
 
 
@@ -119,11 +119,37 @@ class ResultatDiarisation:
         return int(np.clip(round((t - self.decalage) / self.pas_trame), 0, len(self.actifs) - 1))
 
 
+@dataclass
+class Locaux:
+    """Résultat des étapes 1 et 2 (segmentation locale, empreintes) : réutilisable
+    pour essayer plusieurs regroupements sans tout recalculer."""
+    lab: np.ndarray            # (C, T, L) activité des locuteurs locaux
+    debuts: list               # début de chaque fenêtre (échantillons)
+    cles: list                 # (fenêtre, locuteur local) de chaque empreinte
+    Xn: np.ndarray             # empreintes normées
+    zones: list                # intervalles (s) de parole de chaque empreinte
+    duree: float
+    champ_pas: int
+    champ_taille: int
+
+
 def diariser(signal: np.ndarray, duree: float, segmenteur: Segmenteur,
              extracteur: ExtracteurWeSpeaker, k: Optional[int] = None, k_max: int = 20,
              pas_s: Optional[float] = None, duree_min_on: float = 0.3,
              duree_min_off: float = 0.5, lot: int = 16, centrer: bool = False,
-             affiner: bool = False, seuil_distance: float = 0.75) -> ResultatDiarisation:
+             affiner: bool = False, seuil_distance: float = 0.75,
+             regroupement: str = "moyen", taille_min_voix: int = 6) -> ResultatDiarisation:
+    """regroupement : « moyen » (lien moyen, distance cosinus, seuil_distance ; petits
+    groupes rattachés si taille_min_voix > 1) ou « pyannote31 » (lien centroïde)."""
+    loc = empreintes_locales(signal, duree, segmenteur, extracteur, pas_s=pas_s, lot=lot)
+    return regrouper(loc, k=k, k_max=k_max, duree_min_on=duree_min_on, duree_min_off=duree_min_off,
+                     centrer=centrer, affiner=affiner, seuil_distance=seuil_distance,
+                     regroupement=regroupement, taille_min_voix=taille_min_voix)
+
+
+def empreintes_locales(signal: np.ndarray, duree: float, segmenteur: Segmenteur,
+                       extracteur: ExtracteurWeSpeaker, pas_s: Optional[float] = None,
+                       lot: int = 16) -> Locaux:
     F = segmenteur.fenetre
     if pas_s is None:
         pas_s = 1.0 if duree <= 3600 else 2.0
@@ -151,7 +177,7 @@ def diariser(signal: np.ndarray, duree: float, segmenteur: Segmenteur,
 
     # 2. empreinte de chaque locuteur local ------------------------------
     seul = lab * (lab.sum(axis=2, keepdims=True) == 1)
-    cles, vecs = [], []
+    cles, vecs, zones = [], [], []
     jalon = 0.1
     for c, d in enumerate(debuts):
         for j in range(L):
@@ -164,31 +190,54 @@ def diariser(signal: np.ndarray, duree: float, segmenteur: Segmenteur,
             # morceaux contigus -> échantillons
             coupures = np.flatnonzero(np.diff(idx) > 1)
             morceaux = np.split(idx, coupures + 1)
-            parties = []
+            parties, intervalles = [], []
             for m in morceaux:
                 a = d + int(m[0] * ech_par_trame)
                 b = d + int((m[-1] + 1) * ech_par_trame)
                 parties.append(np.asarray(signal[a:min(b, n_ech)], dtype=np.float32))
+                intervalles.append((a / TAUX, min(b, n_ech) / TAUX))
             x = np.concatenate(parties) if parties else np.zeros(0, np.float32)
             v = extracteur.empreinte(x)
             if v is not None and np.all(np.isfinite(v)):
                 cles.append((c, j))
                 vecs.append(v)
+                zones.append(intervalles)
         if (c + 1) / C >= jalon:
             log.info("  empreintes vocales : %3.0f %%", 100 * (c + 1) / C)
             jalon += 0.1
     if len(vecs) < 2:
         raise RuntimeError("Trop peu de parole détectée pour distinguer des locuteurs.")
-    X = np.vstack(vecs)
-    Xn = normer(X)
+    Xn = normer(np.vstack(vecs))
+    return Locaux(lab, debuts, cles, Xn, zones, duree, segmenteur.champ_pas, segmenteur.champ_taille)
+
+
+def regrouper(loc: Locaux, k: Optional[int] = None, k_max: int = 20, duree_min_on: float = 0.3,
+              duree_min_off: float = 0.5, centrer: bool = False, affiner: bool = False,
+              seuil_distance: float = 0.75, regroupement: str = "moyen",
+              taille_min_voix: int = 6, profils: Optional[np.ndarray] = None,
+              poids_canaux: float = 0.0) -> ResultatDiarisation:
+    """profils : (empreintes × micros) RSB de chaque micro pendant la parole de chaque
+    empreinte ; avec poids_canaux > 0, ils s'ajoutent aux empreintes vocales pour le
+    regroupement (position de la personne par rapport aux micros)."""
+    lab, debuts, cles, Xn, duree = loc.lab, loc.debuts, loc.cles, loc.Xn, loc.duree
+    C, T, L = lab.shape
     Z = normer(Xn - Xn.mean(axis=0)) if centrer else Xn
+    if profils is not None and poids_canaux > 0 and profils.shape[1] > 1:
+        P = profils - profils.mean(axis=0)
+        P = normer(P / (P.std(axis=0) + 1e-6))
+        Z = np.hstack([Z * np.sqrt(1 - poids_canaux), P * np.sqrt(poids_canaux)]).astype(np.float32)
 
     # 3. regroupement -----------------------------------------------------
     # chaque empreinte locale résume plusieurs secondes de parole : un groupe
     # d'une seule empreinte peut être un vrai locuteur qui parle peu
-    taille_min = 1 if len(Z) <= 1000 else max(3, int(0.0005 * len(Z)))
-    res = classer(Z, k=k, k_max=k_max, affiner=affiner, taille_min=taille_min,
-                  seuil_distance=seuil_distance)
+    if regroupement == "pyannote31":
+        res = classer_centroide(Z, k=k, k_max=k_max)
+    else:
+        taille_min = 1 if len(Z) <= 1000 else max(3, int(0.0005 * len(Z)))
+        # petits groupes rattachés (pyannote 3.1) ; seuil réduit pour un enregistrement court
+        tmv = int(min(taille_min_voix, max(1, round(0.1 * len(Z)))))
+        res = classer(Z, k=k, k_max=k_max, affiner=affiner, taille_min=taille_min,
+                      seuil_distance=seuil_distance, taille_min_seuil=tmv)
     K = res.k
     affect = -np.ones((C, L), dtype=int)
     par_bloc = {}
@@ -202,14 +251,14 @@ def diariser(signal: np.ndarray, duree: float, segmenteur: Segmenteur,
     etiq_finales = np.array([affect[c, j] for c, j in cles])
 
     # 4. reconstruction ----------------------------------------------------
-    pas_trame = segmenteur.champ_pas / TAUX
-    decalage = segmenteur.champ_taille / TAUX / 2
+    pas_trame = loc.champ_pas / TAUX
+    decalage = loc.champ_taille / TAUX / 2
     G = int(duree / pas_trame) + 1
     activite = np.zeros((G, K), dtype=np.float32)
     nombre = np.zeros(G, dtype=np.float32)
     couverture = np.zeros(G, dtype=np.float32)
     for c, d in enumerate(debuts):
-        g0 = int(round(d / segmenteur.champ_pas))
+        g0 = int(round(d / loc.champ_pas))
         g1 = min(G, g0 + T)
         n = g1 - g0
         if n <= 0:
@@ -246,9 +295,9 @@ def diariser(signal: np.ndarray, duree: float, segmenteur: Segmenteur,
     centres_bruts = np.vstack([Xn[etiq_finales == s].mean(axis=0) if np.any(etiq_finales == s)
                                else np.zeros(Xn.shape[1]) for s in range(K)])
     durees = [float(actifs[:, s].sum() * pas_trame) for s in range(K)]
-    log.info("Diarisation : %d voix, %d tours, %d empreintes locales.", K, len(tours), len(vecs))
+    log.info("Diarisation : %d voix, %d tours, %d empreintes locales.", K, len(tours), len(Xn))
     return ResultatDiarisation(tours, activite, actifs, pas_trame, decalage, centres_bruts, K,
-                               res.silhouette, res.silhouettes_k, len(vecs), durees)
+                               res.silhouette, res.silhouettes_k, len(Xn), durees)
 
 
 def _combler(a: np.ndarray, valeur: int, n_max: int) -> None:

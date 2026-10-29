@@ -138,16 +138,20 @@ def _extraire_pyav(fichier: Path, sorties_par_flux: dict) -> None:
         flux = [s for s in c.streams if s.type == "audio"]
         origine = (c.start_time / 1e6) if c.start_time not in (None, 0) else 0.0
         sorties = {rf: [open(p, "wb") for p in chemins] for rf, chemins in sorties_par_flux.items()}
-        convertisseurs = {rf: av.AudioResampler(format="s16p", layout=flux[rf].layout, rate=TAUX)
+        # format entrelacé (« s16 ») : PyAV ne sait pas découper en plans les trames
+        # de plus de 8 canaux (enregistreurs multipistes : Zoom F8, H6…)
+        convertisseurs = {rf: av.AudioResampler(format="s16", layout=flux[rf].layout, rate=TAUX)
                           for rf in sorties_par_flux}
         rang = {flux[rf].index: rf for rf in sorties_par_flux}
         premier = {rf: True for rf in sorties_par_flux}
 
         def ecrire(rf, trames):
             for t in trames:
-                x = t.to_ndarray()
+                n_c = len(sorties[rf])
+                x = np.frombuffer(bytes(t.planes[0]), dtype="<i2")[: t.samples * n_c]
+                x = x.reshape(-1, n_c)
                 for k, f in enumerate(sorties[rf]):
-                    f.write(np.ascontiguousarray(x[k], dtype="<i2").tobytes())
+                    f.write(np.ascontiguousarray(x[:, k]).tobytes())
 
         try:
             for paquet in c.demux(*[flux[rf] for rf in sorties_par_flux]):

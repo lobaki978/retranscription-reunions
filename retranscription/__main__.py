@@ -33,6 +33,7 @@ def main(argv=None):  # noqa: C901
     t.add_argument("--dossier", default=str(MODELES))
     t.add_argument("--moteur", choices=["wav2vec2", "vosk"], default="wav2vec2")
     t.add_argument("--petit", action="store_true", help="modèle allégé (ordinateur peu puissant)")
+    t.add_argument("--sans-modele-langue", action="store_true", help="ne pas télécharger le modèle de langue")
     t.add_argument("--sans-grand-modele", action="store_true", help=argparse.SUPPRESS)
     t.add_argument("-v", "--verbeux", action="store_true")
 
@@ -49,6 +50,14 @@ def main(argv=None):  # noqa: C901
     tr.add_argument("--moteur", choices=["wav2vec2", "vosk"], default=defaut.moteur,
                     help="reconnaissance de la parole (défaut : wav2vec2)")
     tr.add_argument("--petit", action="store_true", help="modèle allégé (ordinateur peu puissant)")
+    tr.add_argument("--lexique", help="fichier texte : termes du projet à favoriser (un par ligne)")
+    tr.add_argument("--sans-modele-langue", action="store_true",
+                    help="décodage glouton, sans modèle de langue (comme la version 0.3)")
+    tr.add_argument("--faisceau", type=int, default=defaut.largeur_faisceau,
+                    help="largeur du faisceau du décodage avec modèle de langue")
+    tr.add_argument("--regroupement", choices=["moyen", "pyannote31"], default=defaut.regroupement)
+    tr.add_argument("--taille-min-voix", type=int, default=defaut.taille_min_voix,
+                    help="groupe de moins d'empreintes rattaché à la voix la plus proche")
     tr.add_argument("--diarisation", choices=["neurale", "fenetres"], default=defaut.diarisation)
     tr.add_argument("--empreinte", choices=["wespeaker", "vosk", "mfcc"], default=defaut.empreinte,
                     help="empreintes de la méthode « fenetres »")
@@ -90,13 +99,17 @@ def main(argv=None):  # noqa: C901
 
     if args.commande == "telecharger-modeles":
         from .telecharger import necessaires, telecharger
-        telecharger(Path(args.dossier), necessaires(args.moteur, args.petit or args.sans_grand_modele))
+        telecharger(Path(args.dossier), necessaires(args.moteur, args.petit or args.sans_grand_modele,
+                                                    modele_langue=not args.sans_modele_langue))
         return 0
 
     if args.commande == "transcrire":
         from .pipeline import transcrire_session
         p = Parametres(modele=args.modele, modele_leger=args.modele_leger, modele_spk=args.modele_spk,
                        moteur=args.moteur, petit_modele=args.petit, diarisation=args.diarisation,
+                       lexique=args.lexique, utiliser_modele_langue=not args.sans_modele_langue,
+                       largeur_faisceau=args.faisceau, regroupement=args.regroupement,
+                       taille_min_voix=args.taille_min_voix,
                        seuil_voix=args.seuil_voix,
                        empreinte=args.empreinte, reference=args.reference,
                        poids_canaux=args.poids_canaux, nb_locuteurs=args.nb_locuteurs,

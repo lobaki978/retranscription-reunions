@@ -26,6 +26,16 @@ hiddenimports += collect_submodules("retranscription")
 binaries += collect_dynamic_libs("onnxruntime")
 hiddenimports += ["onnxruntime", "onnxruntime.capi._pybind_state"]
 
+# décodage avec modèle de langue (facultatif : absent si KenLM n'a pas pu être compilé)
+for paquet in ("pyctcdecode", "pygtrie", "kenlm"):
+    try:
+        __import__(paquet)
+    except Exception:
+        print(f"*** {paquet} absent : l'application utilisera le décodage glouton ***")
+        continue
+    hiddenimports += [paquet] + collect_submodules(paquet)
+    binaries += collect_dynamic_libs(paquet)
+
 # réseau wav2vec 2.0 miniature (poids aléatoires) pour l'auto-vérification
 donnees = [(str(f), str(f.parent)) for f in Path("retranscription/donnees").rglob("*") if f.is_file()]
 
@@ -53,7 +63,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Retranscription",
             "CFBundleDisplayName": "Retranscription",
-            "CFBundleShortVersionString": "0.3.0",
+            "CFBundleShortVersionString": "0.4.0",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "14.0",
         },
